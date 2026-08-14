@@ -1,0 +1,4 @@
+camera_id: 0
+liveness_threshold: 0.85
+two_man_window_seconds: 5
+blockchain_rpc: "http://127.0.0.1:8545"

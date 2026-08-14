@@ -1,0 +1,13 @@
+opencv-python==4.9.*
+insightface==0.7.*
+onnxruntime==1.18.*
+pydantic==2.*
+pydantic-settings==2.*
+web3==6.*
+eth-account==0.11.*
+cryptography==42.*
+streamlit==1.35.*
+twilio==9.*
+pyyaml==6.*
+loguru==0.7.*
+pytest==8.*
