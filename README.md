@@ -1,16 +1,45 @@
-# VERITAS-Vault v3 · Multi-page security PWA
+# VERITAS-Vault · Zero-Trust Biometric Physical Access Control & Audit
 
-The new browser application uses **FastAPI + four mobile-first pages**, Supabase
-cloud persistence (local SQLite fallback), private AES-GCM evidence, and Web Push.
-Start it with `.venv\Scripts\python.exe -m uvicorn app:app --port 8502` after
-running `python scripts/setup_local.py` to choose a local administrator password.
+VERITAS-Vault is a zero-trust edge-biometric access control and tamper-evident audit system designed for high-security vault checkpoints.
 
-See [PWA deployment and operations](docs/PWA-DEPLOYMENT.md) for cloud provisioning,
-Vercel environment variables, setup, verification, and biometric limitations.
-The former Streamlit interface remains a local legacy tool; install its dependencies
-from `requirements-legacy.txt`. The sections below describe that legacy interface.
+### Production Deployment Architecture
+
+```
+Browser PWA Client (Mobile / Tablet / Desktop)
+      │
+      ▼
+Firebase Hosting  ──( /api/** rewrites )──►  Google Cloud Run (FastAPI / Python 3.12)
+(Static Shell: /checkpoint, /enrollment,       │   ├── ZeroTrustPDP & CaptureSessionManager
+ /audit, /control, manifest, Service Worker)  │   ├── Multi-Signal Heuristic PAD
+                                              │   ├── Biometric Recognition Engine
+                                              │   ├── AES-256-GCM Evidence Encryption
+                                              │   └── Ed25519 Tamper-Evident Hash Chain
+                                              │
+                                              ▼ (service_role only)
+                                      Supabase Cloud Infrastructure
+                                      ├── PostgreSQL (RLS enabled on all tables)
+                                      │   ├── enrolled_users
+                                      │   ├── access_audit_logs
+                                      │   ├── capture_sessions
+                                      │   ├── enrollment_requests
+                                      │   └── vault_records (CAS versioning)
+                                      └── Private Storage (encrypted-evidence bucket)
+```
+
+### Component Status & Truthful Operational Baseline
+
+- **Frontend**: Firebase Hosting (Static PWA under `public/`, service worker caching, HTTPS).
+- **Backend Compute**: Google Cloud Run (FastAPI running in Python 3.12 container, listening on dynamic `$PORT`).
+- **Database**: Supabase PostgreSQL with Row Level Security (RLS) strictly enforced; direct browser/anon access revoked.
+- **Evidence Storage**: Supabase private encrypted storage bucket (`encrypted-evidence`, 5 MB limit, binary octet-stream).
+- **Current Biometric Provider**: `TemplateMatchingProvider` (Normalized Cross-Correlation + Mean Squared Error baseline on 128×128 equalized grayscale). `ArcFaceProvider` and `FaceNetProvider` exist in code but require external model weights (`.onnx`); the system fails closed rather than faking weights.
+- **Current PAD (Presentation Attack Detection)**: Multi-signal heuristic prototype (`MultiSignalPADProvider` combining Laplacian texture variance, frequency domain FFT analysis, specular highlight analysis, and color distribution).
+- **Current Door Controller**: `SimulatedDoorController` (clearly labeled simulated Policy Enforcement Point relay; tracks contact sensors, tamper switch, and pulses software lock).
+- **Current Audit Ledger**: Signed tamper-evident hash chain (`AuditLedger` using SHA-256 link chaining and Ed25519 digital signatures, with local/simulated ledger adapter).
+- **Replay Protection**: Single-use capture nonces and signed PEP tokens cached in-memory per instance. Multi-instance Cloud Run scaling utilizes Supabase `capture_sessions` with unique nonce constraints.
 
 ---
+
 
 # 🛡️ VERITAS-VAULT — Zero-Trust Physical Access Control System
 

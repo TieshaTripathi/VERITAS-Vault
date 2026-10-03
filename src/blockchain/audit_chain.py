@@ -45,6 +45,29 @@ class AuditLedger:
         self._init_db()
 
     def _load_or_generate_keypair(self) -> Tuple[ed25519.Ed25519PrivateKey, ed25519.Ed25519PublicKey]:
+        # Support environment secret or mounted secret path (for Cloud Run / Secret Manager)
+        env_key = os.environ.get("VAULT_AUDIT_SIGNING_KEY")
+        if env_key:
+            key_raw = env_key.encode("utf-8") if isinstance(env_key, str) else env_key
+            if b"BEGIN " in key_raw:
+                private_key = serialization.load_pem_private_key(key_raw, password=None)
+            else:
+                try:
+                    raw_bytes = base64.b64decode(env_key)
+                    if len(raw_bytes) == 32:
+                        private_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
+                    else:
+                        private_key = serialization.load_pem_private_key(raw_bytes, password=None)
+                except Exception:
+                    private_key = serialization.load_pem_private_key(key_raw, password=None)
+            return private_key, private_key.public_key()
+
+        secret_path = os.environ.get("VAULT_AUDIT_SIGNING_KEY_PATH")
+        if secret_path and Path(secret_path).exists():
+            priv_bytes = Path(secret_path).read_bytes()
+            private_key = serialization.load_pem_private_key(priv_bytes, password=None)
+            return private_key, private_key.public_key()
+
         priv_path = self.keys_dir / "audit_signer_ed25519.key"
         pub_path = self.keys_dir / "audit_signer_ed25519.pub"
         if priv_path.exists():
@@ -62,8 +85,11 @@ class AuditLedger:
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             )
-            priv_path.write_bytes(priv_bytes)
-            pub_path.write_bytes(pub_bytes)
+            try:
+                priv_path.write_bytes(priv_bytes)
+                pub_path.write_bytes(pub_bytes)
+            except Exception:
+                pass  # Read-only container fallback
             return private_key, private_key.public_key()
 
     def get_public_key_pem(self) -> str:

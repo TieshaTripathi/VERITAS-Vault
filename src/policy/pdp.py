@@ -69,7 +69,7 @@ class ZeroTrustPDP:
     """
     def __init__(self, signing_secret: Optional[str] = None):
         secret = signing_secret or os.environ.get("VAULT_SIGNING_KEY")
-        is_prod = bool(os.environ.get("VERCEL") or os.environ.get("ENV") == "production")
+        is_prod = bool(os.environ.get("VERCEL") or os.environ.get("K_SERVICE") or os.environ.get("ENV") == "production" or os.environ.get("ENVIRONMENT") == "production")
         if is_prod and (not secret or secret == "default-veritas-signing-secret-32b!"):
             raise RuntimeError("CRITICAL: Production deployment requires a secure, non-default VAULT_SIGNING_KEY.")
         self.signing_secret = (secret or "default-veritas-signing-secret-32b!").encode()

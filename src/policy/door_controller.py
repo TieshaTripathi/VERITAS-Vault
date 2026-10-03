@@ -8,7 +8,7 @@ Tracks contact sensors, lock states, tamper states, and pulses hardware actuator
 from abc import ABC, abstractmethod
 from enum import Enum
 import time
-from typing import Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 
 
 class DoorSecurityState(str, Enum):

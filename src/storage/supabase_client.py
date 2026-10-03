@@ -12,7 +12,7 @@ class CloudUnavailable(RuntimeError):
 class SupabaseCloud:
     def __init__(self):
         self.url = (os.environ.get("SUPABASE_URL") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")).rstrip("/")
-        self.key = os.environ.get("SUPABASE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
+        self.key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY") or os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
         if not self.url.startswith("https://") or not self.key:
             raise CloudUnavailable("Supabase URL and server secret key are required")
 

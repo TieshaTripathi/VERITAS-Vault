@@ -75,7 +75,7 @@ def enroll_face(image_np: np.ndarray, name: str, role: str) -> Tuple[bool, str]:
 
     user_id = f"user_{uuid.uuid4().hex[:6]}"
     os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
-    save_path = os.path.join(KNOWN_FACES_DIR, f"{user_id}.jpg")
+    save_path = os.path.join(KNOWN_FACES_DIR, f"{user_id}.jpg").replace("\\", "/")
 
     cv2.imwrite(save_path, normalized_crop)
 
@@ -138,6 +138,8 @@ def recognize_faces(
                 # Fallback to reading from disk image_path
                 if enrolled_img is None:
                     path = user.get("image_path")
+                    if path:
+                        path = path.replace("\\", "/")
                     if path and os.path.exists(path):
                         enrolled_img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
 
@@ -190,6 +192,8 @@ class FaceRecognizerPipeline:
         for u in users:
             if u["user_id"] == user_id:
                 path = u.get("image_path")
+                if path:
+                    path = path.replace("\\", "/")
                 if path and os.path.exists(path):
                     try:
                         os.remove(path)
@@ -221,6 +225,8 @@ class FaceRecognizerPipeline:
 
             if enrolled_img is None:
                 path = user.get("image_path")
+                if path:
+                    path = path.replace("\\", "/")
                 if path and os.path.exists(path):
                     enrolled_img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
 

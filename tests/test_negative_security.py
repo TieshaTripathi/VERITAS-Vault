@@ -290,12 +290,17 @@ def test_attack_16_client_fake_risk_ignored(sec_client):
     assert assessment.score >= 60
 
 
-# ATTACK 17: Insecure signing key refused in production mode
+# ATTACK 17: Insecure signing key and device secret refused in production mode
 def test_attack_17_production_refuses_default_key(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("VAULT_SIGNING_KEY", "default-veritas-signing-secret-32b!")
     with pytest.raises(RuntimeError, match="CRITICAL: Production deployment requires a secure"):
         ZeroTrustPDP()
+
+    monkeypatch.setenv("VAULT_SIGNING_KEY", "secure-prod-key-12345678901234567890")
+    monkeypatch.setenv("VAULT_DEVICE_SECRET", "default-dev-edge-secret-key-32b!")
+    with pytest.raises(RuntimeError, match="CRITICAL: Production deployment requires a secure"):
+        CaptureSessionManager()
 
 
 # ATTACK 18: Audit event mutation detected

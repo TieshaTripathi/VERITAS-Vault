@@ -18,7 +18,7 @@ from src.vision.biometrics import (
     enroll_face, recognize_faces, FaceRecognizerPipeline, KNOWN_FACES_DIR
 )
 from src.vision.auto_capture import is_face_stable, AutoCaptureEngine
-from src.daemon.alerts import send_sms_alert, test_sms_alert, format_alert_message
+from src.daemon.alerts import send_sms_alert, test_sms_alert as run_sms_alert_test, format_alert_message
 from src.policy.engine import evaluate_access, TwoManPolicyEngine, PolicyState
 from src.diagnostics.boot import run_system_diagnostics, BootDiagnostics
 
@@ -173,6 +173,17 @@ def test_sms_alert_daemon():
     logs = get_recent_logs(limit=5)
     assert any(l["mode"] == "EMERGENCY_SMS_DISPATCH" for l in logs)
     print("[PASS] SMS Alert Daemon PASSED")
+
+
+def test_sms_alert():
+    """Verify test_sms_alert helper returns (bool, str) status and message."""
+    print("Testing SMS alert self-test routine...")
+    ok, msg = run_sms_alert_test()
+    assert isinstance(ok, bool)
+    assert isinstance(msg, str)
+    assert len(msg) > 0
+    print("[PASS] SMS alert self-test routine verified")
+
 
 
 def test_policy_engine_standard_mode():

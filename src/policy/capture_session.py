@@ -28,17 +28,21 @@ class CaptureSessionManager:
         self._active_sessions: Dict[str, Dict[str, Any]] = {}
         # Used nonces cache: nonce -> timestamp (to prevent replay across expired session records)
         self._used_nonces: Dict[str, float] = {}
-        # Registered trusted devices: device_id -> {checkpoint_id, status, shared_secret}
+        is_prod = bool(os.environ.get("VERCEL") or os.environ.get("K_SERVICE") or os.environ.get("ENV") == "production" or os.environ.get("ENVIRONMENT") == "production")
+        secret = os.environ.get("VAULT_DEVICE_SECRET")
+        if is_prod and (not secret or secret == "default-dev-edge-secret-key-32b!"):
+            raise RuntimeError("CRITICAL: Production deployment requires a secure, non-default VAULT_DEVICE_SECRET.")
+        dev_secret = secret or "default-dev-edge-secret-key-32b!"
         self._trusted_devices: Dict[str, Dict[str, Any]] = {
             "DEV-EDGE-01": {
                 "checkpoint_id": "CP-MAIN-01",
                 "status": "ACTIVE",
-                "secret": os.environ.get("VAULT_DEVICE_SECRET", "default-dev-edge-secret-key-32b!")
+                "secret": dev_secret
             },
             "DEV-PWA-01": {
                 "checkpoint_id": "CP-MAIN-01",
                 "status": "ACTIVE",
-                "secret": os.environ.get("VAULT_DEVICE_SECRET", "default-dev-edge-secret-key-32b!")
+                "secret": dev_secret
             }
         }
 
