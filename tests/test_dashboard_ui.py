@@ -8,7 +8,8 @@ from unittest.mock import Mock
 import cv2
 import numpy as np
 import pytest
-from streamlit.testing.v1 import AppTest
+st_testing = pytest.importorskip("streamlit.testing.v1", reason="streamlit.testing.v1 required for dashboard tests")
+AppTest = st_testing.AppTest
 
 APP = Path(__file__).resolve().parents[1] / "dashboard" / "app.py"
 
