@@ -1,5 +1,79 @@
+# ═══════════════════════════════════════════════════════════════════
+# VERITAS-Vault  —  .gitignore
+# ═══════════════════════════════════════════════════════════════════
+
+# ─── Python Environment ───────────────────────────────────────────
 .venv/
+venv/
+ENV/
+env/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.pyd
 .pytest_cache/
-.streamlit/
+.pytest_tmp/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# ─── Databases ────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Encrypted Evidence (never commit to VCS) ─────────────────────
+data/encrypted_evidence/*
+!data/encrypted_evidence/.gitkeep
+
+# ─── Model Weights & Large Binaries ───────────────────────────────
+models/*.dat
+models/*.xml
+models/*.bin
+models/*.onnx
+
+# ─── Secrets & Credentials ────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+firebase-key.json
+config/security_config.json
+
+# ─── Streamlit ────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ─── Node / Build Artefacts ───────────────────────────────────────
+node_modules/
+.cache/
+.parcel-cache/
+.next/
+.out/
+
+# ─── IDEs & System Files ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── Logs ─────────────────────────────────────────────────────────
+logs/
+*.log
+
+# Private PWA state and biometric enrollment artifacts
+data/pwa/
+models/known_faces/*
+!models/known_faces/.gitkeep
+.vercel/
+.env.*
+!.env.example
+test-results/
+playwright-report/
+data/pwa-*.png
+data/pwa-*.json

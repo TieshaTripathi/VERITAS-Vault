@@ -1,0 +1,10 @@
+.git
+.venv
+.env*
+data
+models/known_faces
+dashboard
+tests
+__pycache__
+*.log
+requirements-legacy.txt

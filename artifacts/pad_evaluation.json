@@ -1,0 +1,28 @@
+{
+  "engine": "multisignal-heuristic-pad",
+  "version": "VERITAS-PAD-v2.1-MULTISIGNAL",
+  "threshold_version": "pad-threshold-v1.2",
+  "selected_threshold": 0.65,
+  "dataset": "NONE_PROVIDED",
+  "sample_count": 0,
+  "apcer": "NOT MEASURED",
+  "bpcer": "NOT MEASURED",
+  "acer": "NOT MEASURED",
+  "eer": "NOT MEASURED",
+  "per_attack_results": {
+    "PRINT_ATTACK": {
+      "sample_count": 0,
+      "apcer": "NOT MEASURED"
+    },
+    "SCREEN_REPLAY": {
+      "sample_count": 0,
+      "apcer": "NOT MEASURED"
+    },
+    "VIDEO_REPLAY": {
+      "sample_count": 0,
+      "apcer": "NOT MEASURED"
+    }
+  },
+  "status": "CALIBRATION_INFRASTRUCTURE_READY",
+  "note": "ISO/IEC 30107-3 evaluation requires labeled bona fide and presentation attack datasets. Values are marked NOT MEASURED to prevent research overclaims."
+}

@@ -1,0 +1,13 @@
+{
+  "model_version": "ArcFace-ResNet50-512D-v1.0",
+  "threshold_version": "arcface-threshold-v1",
+  "status": "NOT MEASURED",
+  "selected_threshold": 0.68,
+  "target_far": 0.0001,
+  "measured_far": "NOT MEASURED",
+  "measured_frr": "NOT MEASURED",
+  "eer": "NOT MEASURED",
+  "dataset": "NONE_PROVIDED",
+  "sample_count": 0,
+  "note": "Calibration infrastructure ready. To execute empirical benchmark, supply a directory of labeled biometric pairs."
+}

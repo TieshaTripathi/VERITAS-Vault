@@ -1,0 +1,81 @@
+{
+  "timestamp": 1790968463.136855,
+  "iterations": 30,
+  "stages": {
+    "capture_decode_ms": {
+      "median": 1.52,
+      "p95": 2.52,
+      "p99": 2.76,
+      "min": 1.01,
+      "max": 2.81,
+      "sample_count": 30
+    },
+    "face_quality_ms": {
+      "median": 56.6,
+      "p95": 59.47,
+      "p99": 60.66,
+      "min": 52.05,
+      "max": 61.01,
+      "sample_count": 30
+    },
+    "pad_evaluation_ms": {
+      "median": 12.35,
+      "p95": 13.65,
+      "p99": 13.7,
+      "min": 10.96,
+      "max": 13.71,
+      "sample_count": 30
+    },
+    "biometric_embedding_ms": {
+      "median": 1.23,
+      "p95": 2.24,
+      "p99": 2.34,
+      "min": 0.96,
+      "max": 2.34,
+      "sample_count": 30
+    },
+    "biometric_comparison_ms": {
+      "median": 1.7,
+      "p95": 2.34,
+      "p99": 2.45,
+      "min": 1.45,
+      "max": 2.49,
+      "sample_count": 30
+    },
+    "pdp_evaluation_ms": {
+      "median": 0.04,
+      "p95": 0.05,
+      "p99": 0.06,
+      "min": 0.03,
+      "max": 0.06,
+      "sample_count": 30
+    },
+    "pep_verification_ms": {
+      "median": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "sample_count": 30
+    },
+    "audit_append_ms": {
+      "median": 23.58,
+      "p95": 28.4,
+      "p99": 32.16,
+      "min": 18.02,
+      "max": 32.94,
+      "sample_count": 30
+    },
+    "end_to_end_ms": {
+      "median": 97.57,
+      "p95": 102.78,
+      "p99": 103.9,
+      "min": 91.27,
+      "max": 104.29,
+      "sample_count": 30
+    }
+  },
+  "biometric_provider": "template_matching",
+  "pad_engine": "multisignal-heuristic-pad",
+  "status": "EMPIRICAL_MEASUREMENT_COMPLETE"
+}

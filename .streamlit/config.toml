@@ -1,0 +1,29 @@
+# ═══════════════════════════════════════════════════════════════
+# VERITAS-Vault  —  Streamlit Server & Theme Configuration
+# ═══════════════════════════════════════════════════════════════
+
+[server]
+headless            = true
+port                = 8501
+enableXsrfProtection = true
+maxUploadSize       = 50
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base            = "dark"
+primaryColor    = "#00F0FF"
+backgroundColor = "#0B0F19"
+secondaryBackgroundColor = "#111827"
+textColor       = "#E2E8F0"
+font            = "sans serif"
+
+[runner]
+magicEnabled          = false
+fastReruns            = true
+enforceSerializableSessionState = false
+
+[client]
+showErrorDetails = false
+toolbarMode      = "minimal"

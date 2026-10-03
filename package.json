@@ -1,0 +1,14 @@
+{
+  "name": "veritas-vault-pwa",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "python -m uvicorn app:app --host 127.0.0.1 --port 8502",
+    "build": "python scripts/build_shell.py",
+    "test": "python -m pytest tests/test_pwa.py --basetemp=.pytest_tmp -q -p no:cacheprovider"
+  },
+  "devDependencies": {
+    "agent-browser": "0.27.0"
+  }
+}

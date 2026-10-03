@@ -1,0 +1,23 @@
+[project]
+name = "veritas-vault"
+version = "3.0.0"
+requires-python = ">=3.12,<3.15"
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.52.1",
+  "httpx==0.28.1",
+  "cryptography==50.0.0",
+  "numpy==2.5.2",
+  "opencv-python-headless==4.14.0.94",
+  "pillow==12.3.0",
+  "pydantic==2.13.4",
+  "python-dotenv==1.2.2",
+  "pywebpush==2.5.0",
+  "psycopg[binary]==3.3.6"
+]
+
+[dependency-groups]
+dev = ["pytest==9.0.2"]
+
+[tool.vercel]
+entrypoint = "app:app"

@@ -1,0 +1,11 @@
+{
+  "id": "/", "name": "VERITAS-Vault Security", "short_name": "VERITAS",
+  "description": "Authenticated dual-custody security operations and encrypted evidence.",
+  "start_url": "/checkpoint", "scope": "/", "display": "standalone",
+  "theme_color": "#0b0f19", "background_color": "#0b0f19",
+  "icons": [
+    {"src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ],
+  "shortcuts": [{"name": "Live Checkpoint", "url": "/checkpoint"}, {"name": "Audit Logs", "url": "/logs"}]
+}

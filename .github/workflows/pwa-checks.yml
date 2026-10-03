@@ -1,0 +1,23 @@
+name: PWA checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt pytest==9.0.2
+      - run: python scripts/build_shell.py
+      - run: python -m pytest tests/test_pwa.py -q -p no:cacheprovider
+      - name: Check JavaScript syntax
+        run: |
+          for file in public/assets/*.js public/sw.js; do node --check "$file"; done
+      - run: git diff --exit-code -- public/checkpoint public/enrollment public/logs public/control
