@@ -14,6 +14,7 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .pytest_tmp/
+.pytest_temp/
 .coverage
 htmlcov/
 *.egg-info/
@@ -71,6 +72,7 @@ data/pwa/
 models/known_faces/*
 !models/known_faces/.gitkeep
 .vercel/
+.firebase/
 .env.*
 !.env.example
 test-results/

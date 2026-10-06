@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.pwa.alerts import drain_outbox, settings, valid_push_endpoint
 from src.pwa.policy import advance, fresh
@@ -32,6 +33,22 @@ from src.blockchain.audit_chain import default_audit_ledger
 
 app = FastAPI(title="VERITAS Vault API", docs_url=None, redoc_url=None, openapi_url=None)
 PUBLIC = ROOT / "public"
+
+FRONTEND_ORIGIN = os.environ.get(
+    "APP_ORIGIN",
+    "https://veritas-vault14.web.app",
+).rstrip("/")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[FRONTEND_ORIGIN],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Content-Type",
+        "X-Vault-Request",
+    ],
+)
 
 
 def utc():
@@ -54,7 +71,7 @@ async def headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://veritas-vault-backend.onrender.com; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store, private"
     return response
@@ -128,8 +145,15 @@ def login(body: Credentials, request: Request, response: Response):
         saved = {"id": "local-admin", "name": body.username, "role": "admin", "expires": time.time() + 3600}
     token = secrets.token_urlsafe(32)
     store.put("auth:" + hashlib.sha256(token.encode()).hexdigest(), saved)
-    response.set_cookie("vault_session", token, httponly=True, secure=bool(os.environ.get("VERCEL")) or request.url.scheme == "https",
-                        samesite="strict", max_age=3600, path="/")
+    response.set_cookie(
+        key="vault_session",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=3600,
+        path="/",
+    )
     return {k: saved[k] for k in ("name", "role")}
 
 
@@ -138,7 +162,13 @@ def logout(request: Request, response: Response):
     token = request.cookies.get("vault_session")
     if token:
         Store().put("auth:" + hashlib.sha256(token.encode()).hexdigest(), {"expires": 0})
-    response.delete_cookie("vault_session", path="/")
+    response.delete_cookie(
+        key="vault_session",
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="none",
+    )
     return {"ok": True}
 
 

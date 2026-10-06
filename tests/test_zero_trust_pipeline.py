@@ -189,9 +189,9 @@ def test_api_session_and_pep_verification(tmp_path, monkeypatch):
     monkeypatch.setenv("VAULT_OPERATOR_USERNAME", "admin")
     from src.pwa.security import password_hash
     monkeypatch.setenv("VAULT_OPERATOR_PASSWORD_HASH", password_hash("secret123"))
-    monkeypatch.setenv("APP_ORIGIN", "http://testserver")
+    monkeypatch.setenv("APP_ORIGIN", "https://testserver")
 
-    client = TestClient(app, headers={"X-Vault-Request": "1", "Origin": "http://testserver"})
+    client = TestClient(app, base_url="https://testserver", headers={"X-Vault-Request": "1", "Origin": "https://testserver"})
     # Login
     auth_resp = client.post("/api/auth/login", json={"username": "admin", "password": "secret123"})
     assert auth_resp.status_code == 200
@@ -234,9 +234,9 @@ def test_checkpoint_frame_anti_replay(tmp_path, monkeypatch):
     monkeypatch.setenv("VAULT_OPERATOR_USERNAME", "admin")
     from src.pwa.security import password_hash
     monkeypatch.setenv("VAULT_OPERATOR_PASSWORD_HASH", password_hash("secret123"))
-    monkeypatch.setenv("APP_ORIGIN", "http://testserver")
+    monkeypatch.setenv("APP_ORIGIN", "https://testserver")
 
-    client = TestClient(app, headers={"X-Vault-Request": "1", "Origin": "http://testserver"})
+    client = TestClient(app, base_url="https://testserver", headers={"X-Vault-Request": "1", "Origin": "https://testserver"})
     client.post("/api/auth/login", json={"username": "admin", "password": "secret123"})
 
     # Issue capture session challenge

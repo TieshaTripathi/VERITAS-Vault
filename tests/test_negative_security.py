@@ -53,9 +53,9 @@ def sec_client(tmp_path, monkeypatch):
     monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"Z" * 32).decode())
     monkeypatch.setenv("VAULT_OPERATOR_USERNAME", "admin1")
     monkeypatch.setenv("VAULT_OPERATOR_PASSWORD_HASH", password_hash("AdminPass123!"))
-    monkeypatch.setenv("APP_ORIGIN", "http://testserver")
+    monkeypatch.setenv("APP_ORIGIN", "https://testserver")
 
-    client = TestClient(app, headers={"X-Vault-Request": "1", "Origin": "http://testserver"})
+    client = TestClient(app, base_url="https://testserver", headers={"X-Vault-Request": "1", "Origin": "https://testserver"})
     client.post("/api/auth/login", json={"username": "admin1", "password": "AdminPass123!"})
     return client
 

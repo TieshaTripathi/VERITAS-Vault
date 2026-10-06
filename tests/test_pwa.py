@@ -29,9 +29,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"T" * 32).decode())
     monkeypatch.setenv("VAULT_OPERATOR_USERNAME", "test-operator")
     monkeypatch.setenv("VAULT_OPERATOR_PASSWORD_HASH", password_hash("test-only-password-strong"))
-    monkeypatch.setenv("APP_ORIGIN", "http://testserver")
+    monkeypatch.setenv("APP_ORIGIN", "https://testserver")
     monkeypatch.setattr(backend, "ROOT", tmp_path)
-    return TestClient(backend.app, headers={"X-Vault-Request": "1", "Origin": "http://testserver"})
+    return TestClient(backend.app, base_url="https://testserver", headers={"X-Vault-Request": "1", "Origin": "https://testserver"})
 
 
 def signin(client):
@@ -65,7 +65,7 @@ def test_auth_csrf_logout_and_admin_boundary(client):
     assert client.post("/api/checkpoint/reset", json={}).status_code == 401
     assert client.post("/api/auth/login", json={"username":"x","password":"x"}, headers={"Origin":"https://attacker.invalid"}).status_code == 403
     response = signin(client)
-    assert "HttpOnly" in response.headers["set-cookie"] and "SameSite=strict" in response.headers["set-cookie"]
+    assert "HttpOnly" in response.headers["set-cookie"] and "SameSite=none" in response.headers["set-cookie"] and "Secure" in response.headers["set-cookie"]
     assert client.get("/api/control").status_code == 200
     key, record, version = Store().records("auth:")[0]
     record["role"] = "operator"
@@ -215,3 +215,25 @@ def test_manifest_icons_and_cache_privacy(client):
     assert '/api/' not in allowlist and 'evidence' not in allowlist
     assert re.search(r'addEventListener\([\"\x27]push[\"\x27]',sw.text)
     assert re.search(r'addEventListener\([\"\x27]notificationclick[\"\x27]',sw.text)
+
+
+def test_firebase_render_cors_and_csp(client):
+    prod_origin = "https://veritas-vault14.web.app"
+    # Preflight OPTIONS request from Firebase production origin
+    res_opt = client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": prod_origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type, X-Vault-Request",
+        },
+    )
+    assert res_opt.status_code == 200
+    assert res_opt.headers.get("access-control-allow-origin") == prod_origin
+    assert res_opt.headers.get("access-control-allow-credentials") == "true"
+
+    # CSP header on response allows Render backend in connect-src
+    health_res = client.get("/api/health")
+    assert health_res.status_code == 200
+    csp = health_res.headers.get("content-security-policy", "")
+    assert "connect-src 'self' https://veritas-vault-backend.onrender.com" in csp
