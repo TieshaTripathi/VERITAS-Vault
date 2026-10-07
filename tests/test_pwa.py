@@ -313,3 +313,107 @@ def test_login_with_service_role_key_returns_auth_error_not_503(monkeypatch, tmp
     )
     assert resp.status_code == 401
     assert "Unable to authenticate operator" in resp.json().get("detail", "")
+
+
+def test_evidence_preview_security_and_authorization(client, monkeypatch):
+    """Proves evidence preview endpoint enforces authentication, returns 404 for missing/invalid events, and securely streams in-memory decrypted image."""
+    # 1. Unauthenticated request must return 401
+    unauth_res = client.get("/api/logs/00000000-0000-0000-0000-000000000000/evidence/preview")
+    assert unauth_res.status_code == 401
+
+    signin(client)
+    # Ensure checkpoint is in clean STANDBY state
+    client.post("/api/checkpoint/reset", json={})
+
+    # 2. Non-existent event with valid UUID pattern returns 404
+    assert client.get("/api/logs/00000000-0000-0000-0000-000000000000/evidence/preview").status_code == 404
+
+    # 3. Path traversal / malformed ID returns 422 or 404
+    assert client.get("/api/logs/../../etc/passwd/evidence/preview").status_code in (404, 422)
+    assert client.get("/api/logs/nonexistent-invalid-chars/evidence/preview").status_code == 422
+
+    # 4. Generate an audit log with encrypted evidence
+    monkeypatch.setattr(
+        backend,
+        "recognize",
+        lambda frame, people: ([person(), person("B", "Customer")], {"texture_ok": True, "face_count": 2}),
+    )
+    scan_res = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert scan_res.status_code == 200
+    assert scan_res.json()["state"] == "GRANTED"
+
+    events = client.get("/api/logs").json()
+    assert len(events) >= 1
+    event = events[0]
+    assert "evidence" in event
+    ev_path = event["evidence"]["path"] if isinstance(event["evidence"], dict) else event["evidence"]
+    assert ev_path.endswith(".enc")
+
+    # 5. Authenticated preview retrieves decrypted image
+    preview_res = client.get(f"/api/logs/{event['id']}/evidence/preview")
+    assert preview_res.status_code == 200
+    assert preview_res.headers.get("cache-control") == "no-store, private"
+    assert preview_res.headers.get("x-content-type-options") == "nosniff"
+    assert preview_res.headers.get("content-type") in ("image/jpeg", "image/png")
+
+    # Verify bytes decode to a valid image
+    img = cv2.imdecode(np.frombuffer(preview_res.content, np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None
+    assert hashlib.sha256(img.tobytes()).hexdigest() == event["sha256_hash"]
+
+
+def test_unknown_identity_breach_and_encrypted_evidence_metadata(client, monkeypatch):
+    """Proves unknown face triggers ZT-001 BREACH, saves encrypted evidence, and never persists raw image in metadata."""
+    signin(client)
+    # Reset checkpoint to clear previous terminal state
+    client.post("/api/checkpoint/reset", json={})
+
+    # Simulate unknown face detection (is_recognized=False)
+    unknown_face = dict(
+        id="unknown-1",
+        name="Unknown",
+        role="Unknown",
+        is_recognized=False,
+        is_live=True,
+        confidence=0.12,
+        pad_status="PASS",
+        bbox=[10, 20, 100, 120],
+    )
+    monkeypatch.setattr(
+        backend,
+        "recognize",
+        lambda frame, people: ([unknown_face], {"texture_ok": True, "face_count": 1}),
+    )
+
+    frame_payload = {"image": jpeg()}
+    res = client.post("/api/checkpoint/frame", json=frame_payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["state"] == "BREACH"
+    assert data.get("reason_code") == "ZT-001"
+    assert "Unregistered" in data.get("reason", "")
+    assert "frame_size" in data
+
+    # Audit event must be recorded
+    logs = client.get("/api/logs").json()
+    breach_logs = [l for l in logs if l.get("reason_code") == "ZT-001"]
+    assert len(breach_logs) >= 1
+    breach_event = breach_logs[0]
+
+    assert breach_event["verdict"] == "BREACH"
+    assert breach_event["reason_code"] == "ZT-001"
+    assert "evidence" in breach_event
+    ev_path = breach_event["evidence"]["path"] if isinstance(breach_event["evidence"], dict) else breach_event["evidence"]
+    assert ev_path.endswith(".enc")
+    assert "sha256_hash" in breach_event
+
+    # Verify no raw image or base64 plaintext in log record metadata
+    serialized_log = json.dumps(breach_event)
+    assert frame_payload["image"] not in serialized_log
+
+    # Preview works for breach event
+    preview = client.get(f"/api/logs/{breach_event['id']}/evidence/preview")
+    assert preview.status_code == 200
+    assert preview.headers.get("cache-control") == "no-store, private"
+    assert preview.headers.get("x-content-type-options") == "nosniff"
+

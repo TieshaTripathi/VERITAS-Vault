@@ -24,21 +24,41 @@ def dial(identifier="timer"):
 
 def camera(enrollment=False):
     return f'''<div class="hud" id="hud"><video id="camera" autoplay playsinline muted aria-label="Local camera preview"></video>
+    <canvas id="hud-overlay" class="hud-overlay" aria-hidden="true"></canvas>
     <div class="empty" id="camera-empty"><div class="reticle">{icon('checkpoint')}</div><b>{'ENROLLMENT STATION' if enrollment else 'VAULT CHAMBER / CAM 01'}</b><p>Start the camera when you are ready.<br>Your browser will request camera permission.</p></div>
     <i class="hud-corner tl"></i><i class="hud-corner tr"></i><i class="hud-corner bl"></i><i class="hud-corner br"></i><i class="scanline"></i>
     <div class="camera-meta"><span>ENCRYPTED INGESTION</span><span>640 × 480 / LOCAL PREVIEW</span></div></div>'''
 
 
 CHECKPOINT = f'''
+<div class="critical-alert-card" id="critical-alert-card" hidden role="alert">
+  <div class="critical-alert-content">
+    <div class="alert-icon">⚠️</div>
+    <div class="alert-details">
+      <div class="alert-header">
+        <strong id="alert-code">SECURITY BREACH · ACCESS DENIED</strong>
+        <span id="alert-time" class="alert-time"></span>
+      </div>
+      <p id="alert-message">UNREGISTERED IDENTITY DETECTED · EVIDENCE CAPTURED · ACCESS LOCKED</p>
+    </div>
+  </div>
+  <div class="alert-actions">
+    <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
+  </div>
+</div>
 <div class="status-banner" id="verdict" role="status">LOCKED · AUTHENTICATE TO BEGIN VERIFICATION</div>
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / LIVE BIOMETRIC FEED</h2><span class="badge" id="feed-state">STANDBY</span></div>
 {camera()}<div class="camera-controls"><button class="primary" id="start-camera">Start surveillance</button><button id="stop-camera" disabled>Stop camera</button><small>VIDEO STAYS LOCAL · SAMPLED FRAMES VERIFIED SERVER-SIDE</small></div>
-<div class="telemetry"><div class="stat"><span class="stat-label">IDENTITIES</span><strong id="face-count">—</strong></div><div class="stat"><span class="stat-label">TEXTURE CHECK</span><strong id="liveness">—</strong></div><div class="stat"><span class="stat-label">VAULT STATE</span><strong id="lock-state">LOCKED</strong></div></div></section>
+<div class="telemetry"><div class="stat"><span class="stat-label">DETECTED</span><strong id="face-count">—</strong></div><div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">—</strong></div><div class="stat"><span class="stat-label">ACCESS STATE</span><strong id="lock-state">LOCKED</strong></div></div></section>
 <div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / DUAL-CUSTODY VERIFICATION</h2><span class="badge">Δt ≤ 5.0s</span></div>
 <div class="party" id="party-0"><div class="avatar">1</div><div><strong>Awaiting identity</strong><small>Primary officer / customer</small></div></div>
 <div class="party" id="party-1"><div class="avatar">2</div><div><strong>Awaiting identity</strong><small>Second distinct party</small></div></div>
 <div class="timer-panel">{dial()}<div><span class="eyebrow">TEMPORAL WINDOW</span><h3 id="timer-title">Ready to verify</h3><p id="deadline-note">The first verified identity starts the server-enforced clock.</p></div></div>
 <div class="rules"><div class="rule"><span>01</span> Two distinct enrolled identities</div><div class="rule"><span>02</span> NCC ≥ 0.82 · Laplacian ≥ 60.0</div><div class="rule"><span>03</span> SHA-256 notarization · AES-256-GCM</div></div></section>
+<section class="panel" id="alert-center-panel"><div class="panel-head"><h2 class="section-label">03 / ALERT CENTER</h2><span class="badge" id="alert-center-badge">STANDBY</span></div>
+<div class="alert-center-grid"><div class="alert-stat"><span class="stat-label">ALARM SIREN</span><strong id="alarm-state-indicator">SILENT</strong></div>
+<div class="alert-stat"><span class="stat-label">AUDIO CONTROL</span><button type="button" id="toggle-mute" class="quiet-toggle">SIREN: ACTIVE</button></div>
+<div class="alert-stat"><span class="stat-label">BROWSER ALERTS</span><button type="button" id="btn-enable-notifs" class="quiet-toggle">ENABLE NOTIFS</button></div></div></section>
 <section class="panel"><div class="panel-head"><h2>Access protocol</h2><span class="badge">ZERO TRUST</span></div><label for="mode">Required custody combination</label><select id="mode"><option value="standard">Employee + Customer</option><option value="high-value">Two distinct Employees</option></select><div class="form-actions"><button id="reset">Reset / apply protocol</button></div><p class="callout">A terminal verdict stays latched until reset. This console reports a policy decision; it does not directly actuate a door lock.</p></section></div></div>'''
 
 ENROLLMENT = f'''
@@ -58,7 +78,26 @@ LOGS = '''<section class="panel"><div class="panel-head"><h2 class="section-labe
 <form class="filters" id="filters"><label>Verdict<select id="filter-status"><option value="">All events</option><option>GRANTED</option><option>DENIED</option><option>BREACH</option><option>RESET</option></select></label><label>From / UTC<input type="date" id="date-start"></label><label>Through / UTC<input type="date" id="date-end"></label><button class="primary" type="submit">Apply filters</button><button type="button" id="refresh">↻ Refresh</button></form>
 <div class="table-scroll"><table><thead><tr><th>TIMESTAMP / UTC</th><th>VERDICT</th><th>VERIFIED PARTIES</th><th>PROTOCOL</th><th>SHA-256 DIGEST</th><th>EVIDENCE</th></tr></thead><tbody id="audit-body"></tbody></table><div class="empty-state" id="logs-empty"><b>The evidence trail starts here.</b>Sign in to inspect recent access events, identity roles, and encrypted payloads.</div></div>
 <p class="callout">Newest 200 records · Refreshes every 3 seconds · SHA-256 covers the decoded BGR frame bytes · Evidence downloads contain ciphertext only.</p></section>
-<dialog id="inspector" aria-labelledby="inspector-title"><button class="close" data-close aria-label="Close inspector">×</button><h2 id="inspector-title">Evidence inspector</h2><dl id="inspector-data"></dl><div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap"><button type="button" id="copy-modal-hash" class="primary" style="display:none">Copy SHA-256 Digest ⧉</button><a id="download-evidence" href="#" download>Download encrypted payload ↗</a></div><p class="callout">Access is re-authorized on download. Payloads are never placed in the offline cache.</p></dialog>'''
+<dialog id="inspector" aria-labelledby="inspector-title"><button class="close" data-close aria-label="Close inspector">×</button>
+<div id="inspector-intruder-badge" class="intruder-badge" hidden>🚨 INTRUDER CAPTURE · UNREGISTERED IDENTITY DETECTED</div>
+<h2 id="inspector-title">Evidence inspector</h2>
+<div id="inspector-preview-box" class="evidence-preview-box" hidden>
+  <div class="preview-box-header">
+    <span class="preview-badge">AUTHENTICATED DECRYPTED FRAME</span>
+    <span id="preview-dim" class="preview-dim">640 × 480</span>
+  </div>
+  <div class="preview-img-wrap">
+    <img id="evidence-preview-img" alt="Captured Frame Preview" src="" />
+    <div id="preview-spinner" class="preview-spinner" hidden>DECRYPTING EVIDENCE...</div>
+  </div>
+</div>
+<dl id="inspector-data"></dl>
+<div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
+  <button type="button" id="btn-view-preview" class="primary" style="display:none">View captured frame 👁</button>
+  <a id="download-evidence" class="button" href="#" download>Download encrypted payload ↗</a>
+  <button type="button" id="copy-modal-hash" class="quiet" style="display:none">Copy SHA-256 Digest ⧉</button>
+</div>
+<p class="callout">Decrypted server-side in memory for authenticated operators only. Payloads are never placed in the offline cache.</p></dialog>'''
 
 CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">THREAT SIMULATION LAB</h2><span class="badge">ISOLATED PREVIEW</span></div><p>Exercise the visual states without touching the live checkpoint or sending alerts.</p>
 <div class="sim-grid"><button data-simulate="spoof"><b>◈ Presentation spoof</b><small>Simulate a printed / replayed face</small></button><button data-simulate="intruder"><b>⌖ Unregistered intruder</b><small>Simulate an unknown identity</small></button><button data-simulate="timeout"><b>◷ Single-custody timeout</b><small>Run the complete 5.0s window</small></button><button data-simulate="granted"><b>✓ Valid dual custody</b><small>Preview the granted state</small></button></div>
@@ -91,9 +130,9 @@ def build():
         nav = ''.join(f'<a href="/{key}" {"aria-current=page" if key==page or (page=="audit" and key=="logs") else ""}>{icon(key)}<span>{label}</span></a>' for key,label in NAMES.items())
         html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#0b0f19"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="description" content="VERITAS-Vault authenticated security operations"><title>{title} · VERITAS-Vault</title><link rel="manifest" href="/manifest.json"><link rel="icon" href="/icons/logo.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/icons/icon-192.png"><link rel="stylesheet" href="/assets/styles.css"><script type="module" src="/assets/{script_name}.js"></script></head>
 <body><a class="skip" href="#main">Skip to content</a><div class="offline-bar" id="offline" hidden role="status">Offline shell · verification and evidence access paused</div><header class="topbar"><a class="brand" href="/checkpoint"><img src="/icons/logo.svg" alt=""><span>VERITAS<small>VAULT SECURITY SYSTEMS</small></span></a><nav class="nav" aria-label="Primary navigation">{nav}</nav><div class="top-actions"><span id="connection" class="connection" aria-label="Network status"></span><span id="operator" class="eyebrow"></span><button class="install quiet" data-install hidden>Install ↗</button><button id="signin">Operator sign-in</button><button id="signout" hidden>Sign out</button></div></header>
-<main id="main"><section class="hero"><div><div class="eyebrow">{eyebrow}</div><h1>{title}<em>.</em></h1><p>{subtitle}</p></div><div class="hero-meta"><strong>ZERO-TRUST ACCESS CONTROL</strong><br>AES-256-GCM / SHA-256<br>COMMAND CENTER V3.0</div></section><div id="notice" class="notice" role="status"></div>{content}</main>
-<footer class="footer"><span>VERITAS / INTEGRITY IS NON-NEGOTIABLE</span><span>DUAL CUSTODY · ENCRYPTED EVIDENCE · LOCAL & CLOUD</span></footer><div id="toast" class="toast" hidden role="status"></div>
-<dialog id="auth-dialog" aria-labelledby="auth-title"><button class="close" data-close aria-label="Close sign-in">×</button><p class="eyebrow">AUTHORIZED PERSONNEL ONLY</p><h2 id="auth-title">Operator authentication</h2><p>Use your Supabase operator email or the locally configured administrator account.</p><form id="auth-form"><label>Operator email / username<input id="username" required autocomplete="username"></label><label>Password<input id="password" required type="password" autocomplete="current-password"></label><p id="auth-error" role="alert"></p><div class="form-actions"><button class="primary" type="submit">Authenticate</button></div></form><p class="callout">Local first run: execute <code>python scripts/setup_local.py</code>. No default password is enabled.</p></dialog><noscript><div class="notice">JavaScript is required for camera capture and protected operations.</div></noscript></body></html>'''
+<main id="main"><section class="hero compact-hero"><div><div class="eyebrow">{eyebrow}</div><h1>{title}<em>.</em></h1><p>{subtitle}</p></div></section><div id="notice" class="notice" role="status"></div>{content}</main>
+<footer class="footer"><span>VERITAS VAULT OPERATING CONSOLE</span><span>DUAL CUSTODY · ENCRYPTED EVIDENCE · AUDIT CHAIN</span></footer><div id="toast" class="toast" hidden role="status"></div>
+<dialog id="auth-dialog" aria-labelledby="auth-title"><button class="close" data-close aria-label="Close sign-in">&times;</button><p class="eyebrow">AUTHORIZED PERSONNEL ONLY</p><h2 id="auth-title">Operator authentication</h2><p>Use your Supabase operator email or the locally configured administrator account.</p><form id="auth-form"><label>Operator email / username<input id="username" required autocomplete="username"></label><label>Password<input id="password" required type="password" autocomplete="current-password"></label><p id="auth-error" role="alert"></p><div class="form-actions"><button class="primary" type="submit">Authenticate</button></div></form><p class="callout">Local first run: execute <code>python scripts/setup_local.py</code>. No default password is enabled.</p></dialog><noscript><div class="notice">JavaScript is required for camera capture and protected operations.</div></noscript></body></html>'''
         directory=ROOT/page
         directory.mkdir(parents=True,exist_ok=True)
         (directory/'index.html').write_text(html,encoding='utf-8')

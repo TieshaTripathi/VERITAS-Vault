@@ -14,6 +14,7 @@ const SHELL = [
   "/assets/enrollment.js",
   "/assets/logs.js",
   "/assets/control.js",
+  "/assets/alerts.js",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/logo.svg",

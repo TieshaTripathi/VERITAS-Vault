@@ -415,7 +415,8 @@ def transition(faces=None, evidence=None, key="checkpoint:main"):
             )
             event = {
                 "id": event_id, "timestamp": now_utc, "verdict": updated["state"], "mode": updated["mode"],
-                "parties": updated["parties"], "reason": updated["reason"], "evidence": proof,
+                "parties": updated["parties"], "reason": updated["reason"], "reason_code": updated.get("reason_code"),
+                "evidence": proof,
                 "sha256_hash": proof.get("sha256"), "status": "CLOUD_STORED" if store.cloud else "LOCAL_STORED",
                 "chain_sequence": ledger_entry["sequence_number"], "event_hash": ledger_entry["event_hash"],
                 "previous_hash": ledger_entry["previous_hash"], "signature": ledger_entry["signature"],
@@ -467,9 +468,15 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
                 state = state or fresh()
                 state.update(state="BREACH", reason=capture_err)
                 event_id = str(uuid.uuid4())
+                proof = {}
+                if raw:
+                    ev_digest = hashlib.sha256(raw).hexdigest()
+                    ev_path = f"evidence/{uuid.uuid4()}.enc"
+                    store.save_blob(ev_path, seal(raw, "evidence:" + ev_digest))
+                    proof = {"path": ev_path, "sha256": ev_digest, "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1")}
                 event = {"id": event_id, "timestamp": utc(), "verdict": "BREACH", "mode": state.get("mode", "standard"),
-                         "parties": state.get("parties", []), "reason": capture_err, "evidence": {},
-                         "sha256_hash": hashlib.sha256(raw).hexdigest(), "status": "RECORDED"}
+                         "parties": state.get("parties", []), "reason": capture_err, "evidence": proof,
+                         "sha256_hash": proof.get("sha256") or hashlib.sha256(raw).hexdigest(), "status": "RECORDED"}
                 job = {"id": event_id, "created_at": utc(), "done": False, "attempts": 0, "status": "PENDING"}
                 store.cas("checkpoint:main", version, state, event, job)
                 background.add_task(drain_outbox)
@@ -487,7 +494,7 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
         proof = {"path": path, "sha256": digest, "shape": list(frame.shape),
                  "encoding": "BGR uint8 decoded pixels", "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1")}
     result, terminal = transition(faces if proof else [], proof)
-    result.update(faces=faces, quality=quality_report)
+    result.update(faces=faces, quality=quality_report, frame_size=[int(frame.shape[1]), int(frame.shape[0])])
     if result["state"] == "GRANTED":
         result["authorization_token"] = default_pdp._issue_signed_authorization(
             checkpoint_id=body.checkpoint_id or "CP-MAIN-01",
@@ -576,6 +583,30 @@ def evidence(event_id: uuid.UUID, user=Depends(operator)):
         raise HTTPException(404, "No encrypted frame for this event")
     return Response(Store().read_blob(event["evidence"]["path"]), media_type="application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{event_id}.enc"'})
+
+
+@app.get("/api/logs/{event_id}/evidence/preview")
+def evidence_preview(event_id: uuid.UUID, user=Depends(operator)):
+    event = Store().event(str(event_id))
+    if not event or not event.get("evidence", {}).get("path"):
+        raise HTTPException(404, "No encrypted frame for this event")
+    evidence_meta = event["evidence"]
+    path = evidence_meta["path"]
+    digest = evidence_meta.get("sha256", "")
+    try:
+        encrypted_blob = Store().read_blob(path)
+        decrypted = unseal(encrypted_blob, "evidence:" + digest)
+    except Exception as exc:
+        raise HTTPException(500, "Unable to decrypt evidence frame") from exc
+    media_type = "image/png" if decrypted.startswith(b"\x89PNG") else "image/jpeg"
+    return Response(
+        content=decrypted,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "no-store, private",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/api/audit/verify")

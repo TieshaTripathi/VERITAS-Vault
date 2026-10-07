@@ -1,4 +1,4 @@
-import { $, escape, api, action, toast, currentUser } from "./common.js";
+import { $, escape, api, action, toast, currentUser, evidenceUrl } from "./common.js";
 let busy = false,
   events = [];
 async function load() {
@@ -17,7 +17,7 @@ async function load() {
     $("#event-count").textContent = events.length + " RECENT RECORDS";
     for (const event of events) {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td class="mono">${escape(event.timestamp.slice(0, 19).replace("T", " "))}</td><td><span class="badge ${escape(event.verdict)}">${escape(event.verdict)}</span></td><td>${escape(event.parties.map((p) => p.name).join(" + ") || "—")}</td><td>${escape(event.mode)}</td><td></td><td><button class="quiet inspect">Inspect ↗</button></td>`;
+      tr.innerHTML = `<td class="mono">${escape(event.timestamp.slice(0, 19).replace("T", " "))}</td><td><span class="badge ${escape(event.verdict)}">${escape(event.verdict)}</span></td><td>${escape(event.parties.map((p) => p.name).join(" + ") || "—")}</td><td>${escape(event.mode)}</td><td></td><td><button class="quiet inspect">${event.evidence?.path ? "View Evidence 👁" : "Inspect ↗"}</button></td>`;
       const hash = document.createElement("button");
       hash.className = "hash";
       hash.textContent = event.sha256_hash
@@ -45,18 +45,42 @@ async function load() {
 }
 function inspect(event) {
   $("#inspector-data").replaceChildren();
+
+  // Intruder Badge on ZT-001 or unrecognized identity breach
+  const isIntruder =
+    event.verdict === "BREACH" &&
+    (event.reason?.toLowerCase().includes("unregistered") ||
+      event.reason_code === "ZT-001" ||
+      !event.parties?.length);
+  const badgeEl = $("#inspector-intruder-badge");
+  if (badgeEl) {
+    badgeEl.hidden = !isIntruder;
+  }
+
+  // Reset preview box
+  const previewBox = $("#inspector-preview-box");
+  const previewImg = $("#evidence-preview-img");
+  const previewSpinner = $("#preview-spinner");
+  if (previewBox) previewBox.hidden = true;
+  if (previewImg) previewImg.src = "";
+  if (previewSpinner) {
+    previewSpinner.hidden = false;
+    previewSpinner.textContent = "DECRYPTING EVIDENCE...";
+  }
+
   const fields = {
     "Event ID": event.id,
     "ISO timestamp": event.timestamp,
     Verdict: event.verdict,
     Policy: event.mode,
     Reason: event.reason,
+    "Reason code": event.reason_code || (isIntruder ? "ZT-001" : "—"),
     "Verified roles":
       event.parties.map((p) => `${p.name} (${p.role}) · ${p.id}`).join("\n") ||
-      "None",
+      (isIntruder ? "UNKNOWN / UNAUTHORIZED" : "None"),
     "SHA-256 / decoded frame": event.sha256_hash || "No frame attached",
-    Storage: event.status,
-    "Encryption key ID": event.evidence?.key_id || "—",
+    Storage: event.status || "ENCRYPTED / SUPABASE",
+    "Encryption key ID": event.evidence?.key_id || "primary-v1",
   };
   for (const [label, value] of Object.entries(fields)) {
     const dt = document.createElement("dt"),
@@ -97,9 +121,58 @@ function inspect(event) {
       modalCopyBtn.style.display = "none";
     }
   }
-  $("#download-evidence").hidden = !event.evidence?.path;
-  $("#download-evidence").href =
-    "/api/logs/" + encodeURIComponent(event.id) + "/evidence";
+
+  const hasEvidence = Boolean(event.evidence?.path);
+  const viewPreviewBtn = $("#btn-view-preview");
+  const downloadBtn = $("#download-evidence");
+
+  if (viewPreviewBtn) {
+    viewPreviewBtn.style.display = hasEvidence ? "inline-flex" : "none";
+    viewPreviewBtn.onclick = async () => {
+      if (!hasEvidence) return;
+      if (previewBox) previewBox.hidden = false;
+      if (previewSpinner) previewSpinner.hidden = false;
+      if (previewImg) previewImg.style.display = "none";
+      try {
+        const res = await fetch(evidenceUrl(event.id, true), {
+          credentials: "include",
+          headers: { "X-Vault-Request": "1" },
+        });
+        if (!res.ok) {
+          throw new Error(`Failed to decrypt evidence: ${res.statusText}`);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        if (previewImg) {
+          previewImg.src = url;
+          previewImg.onload = () => {
+            if (previewSpinner) previewSpinner.hidden = true;
+            previewImg.style.display = "block";
+            const dimEl = $("#preview-dim");
+            if (dimEl) {
+              dimEl.textContent = `${previewImg.naturalWidth} × ${previewImg.naturalHeight} · IN-MEMORY DECRYPTED`;
+            }
+          };
+        }
+      } catch (err) {
+        if (previewSpinner) {
+          previewSpinner.textContent = "DECRYPTION FAILED · SECURE ACCESS ONLY";
+        }
+        toast(err.message);
+      }
+    };
+  }
+
+  if (downloadBtn) {
+    downloadBtn.hidden = !hasEvidence;
+    downloadBtn.href = hasEvidence ? evidenceUrl(event.id, false) : "#";
+  }
+
+  // If intruder event has evidence, auto-trigger preview decryption
+  if (isIntruder && hasEvidence && viewPreviewBtn) {
+    viewPreviewBtn.click();
+  }
+
   $("#inspector").showModal();
 }
 $("#filters").onsubmit = (event) => {
