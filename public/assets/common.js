@@ -313,6 +313,10 @@ export async function initialize() {
     if (notice) {
       notice.textContent = "";
     }
+
+    document.dispatchEvent(
+      new CustomEvent("vault-auth", { detail: currentUser }),
+    );
   } catch (error) {
     currentUser = null;
 

@@ -32,9 +32,29 @@
     <div class="dial-value"><strong>5.0s</strong><small>/ 5.0 SEC</small></div></div><div><span class="eyebrow">TEMPORAL WINDOW</span><h3 id="timer-title">Ready to verify</h3><p id="deadline-note">The first verified identity starts the server-enforced clock.</p></div></div>
 <div class="rules"><div class="rule"><span>01</span> Two distinct enrolled identities</div><div class="rule"><span>02</span> NCC ≥ 0.82 · Laplacian ≥ 60.0</div><div class="rule"><span>03</span> SHA-256 notarization · AES-256-GCM</div></div></section>
 <section class="panel" id="alert-center-panel"><div class="panel-head"><h2 class="section-label">03 / ALERT CENTER</h2><span class="badge" id="alert-center-badge">STANDBY</span></div>
-<div class="alert-center-grid"><div class="alert-stat"><span class="stat-label">ALARM SIREN</span><strong id="alarm-state-indicator">SILENT</strong></div>
-<div class="alert-stat"><span class="stat-label">AUDIO CONTROL</span><button type="button" id="toggle-mute" class="quiet-toggle">SIREN: ACTIVE</button></div>
-<div class="alert-stat"><span class="stat-label">BROWSER ALERTS</span><button type="button" id="btn-enable-notifs" class="quiet-toggle">ENABLE NOTIFS</button></div></div></section>
+<div class="alert-center-box" id="alert-center-standby">
+  <div class="alert-center-row">
+    <div class="alert-field"><span class="field-label">Alarm sound</span><strong id="alarm-state-indicator" class="field-val">SILENT</strong></div>
+    <button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button>
+  </div>
+  <div class="alert-center-row">
+    <div class="alert-field"><span class="field-label">Phone alerts</span><strong id="phone-push-indicator" class="field-val">NOT CONFIGURED</strong></div>
+    <button type="button" id="btn-enable-phone" class="ac-btn">ENABLE PHONE ALERTS</button>
+  </div>
+</div>
+<div class="alert-center-box breach-box" id="alert-center-breach" hidden>
+  <div class="alert-breach-header">
+    <strong id="ac-breach-title">ZT-001 · UNKNOWN IDENTITY</strong>
+    <span id="ac-breach-time" class="field-time"></span>
+  </div>
+  <div class="alert-center-row">
+    <div class="alert-field"><span class="field-label">Alarm</span><strong id="ac-breach-alarm" class="field-val alarm-sounding">SOUNDING</strong></div>
+    <div class="alert-field"><span class="field-label">Phone push</span><strong id="ac-breach-push" class="field-val">SENT</strong></div>
+  </div>
+  <div class="alert-center-actions">
+    <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE</button>
+  </div>
+</div></section>
 <section class="panel"><div class="panel-head"><h2>Access protocol</h2><span class="badge">ZERO TRUST</span></div><label for="mode">Required custody combination</label><select id="mode"><option value="standard">Employee + Customer</option><option value="high-value">Two distinct Employees</option></select><div class="form-actions"><button id="reset">Reset / apply protocol</button></div><p class="callout">A terminal verdict stays latched until reset. This console reports a policy decision; it does not directly actuate a door lock.</p></section></div></div></main>
 <footer class="footer"><span>VERITAS VAULT OPERATING CONSOLE</span><span>DUAL CUSTODY · ENCRYPTED EVIDENCE · AUDIT CHAIN</span></footer><div id="toast" class="toast" hidden role="status"></div>
 <dialog id="auth-dialog" aria-labelledby="auth-title"><button class="close" data-close aria-label="Close sign-in">&times;</button><p class="eyebrow">AUTHORIZED PERSONNEL ONLY</p><h2 id="auth-title">Operator authentication</h2><p>Use your Supabase operator email or the locally configured administrator account.</p><form id="auth-form"><label>Operator email / username<input id="username" required autocomplete="username"></label><label>Password<input id="password" required type="password" autocomplete="current-password"></label><p id="auth-error" role="alert"></p><div class="form-actions"><button class="primary" type="submit">Authenticate</button></div></form><p class="callout">Local first run: execute <code>python scripts/setup_local.py</code>. No default password is enabled.</p></dialog><noscript><div class="notice">JavaScript is required for camera capture and protected operations.</div></noscript></body></html>

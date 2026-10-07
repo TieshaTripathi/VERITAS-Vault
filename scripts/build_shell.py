@@ -56,9 +56,29 @@ CHECKPOINT = f'''
 <div class="timer-panel">{dial()}<div><span class="eyebrow">TEMPORAL WINDOW</span><h3 id="timer-title">Ready to verify</h3><p id="deadline-note">The first verified identity starts the server-enforced clock.</p></div></div>
 <div class="rules"><div class="rule"><span>01</span> Two distinct enrolled identities</div><div class="rule"><span>02</span> NCC ≥ 0.82 · Laplacian ≥ 60.0</div><div class="rule"><span>03</span> SHA-256 notarization · AES-256-GCM</div></div></section>
 <section class="panel" id="alert-center-panel"><div class="panel-head"><h2 class="section-label">03 / ALERT CENTER</h2><span class="badge" id="alert-center-badge">STANDBY</span></div>
-<div class="alert-center-grid"><div class="alert-stat"><span class="stat-label">ALARM SIREN</span><strong id="alarm-state-indicator">SILENT</strong></div>
-<div class="alert-stat"><span class="stat-label">AUDIO CONTROL</span><button type="button" id="toggle-mute" class="quiet-toggle">SIREN: ACTIVE</button></div>
-<div class="alert-stat"><span class="stat-label">BROWSER ALERTS</span><button type="button" id="btn-enable-notifs" class="quiet-toggle">ENABLE NOTIFS</button></div></div></section>
+<div class="alert-center-box" id="alert-center-standby">
+  <div class="alert-center-row">
+    <div class="alert-field"><span class="field-label">Alarm sound</span><strong id="alarm-state-indicator" class="field-val">SILENT</strong></div>
+    <button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button>
+  </div>
+  <div class="alert-center-row">
+    <div class="alert-field"><span class="field-label">Phone alerts</span><strong id="phone-push-indicator" class="field-val">NOT CONFIGURED</strong></div>
+    <button type="button" id="btn-enable-phone" class="ac-btn">ENABLE PHONE ALERTS</button>
+  </div>
+</div>
+<div class="alert-center-box breach-box" id="alert-center-breach" hidden>
+  <div class="alert-breach-header">
+    <strong id="ac-breach-title">ZT-001 · UNKNOWN IDENTITY</strong>
+    <span id="ac-breach-time" class="field-time"></span>
+  </div>
+  <div class="alert-center-row">
+    <div class="alert-field"><span class="field-label">Alarm</span><strong id="ac-breach-alarm" class="field-val alarm-sounding">SOUNDING</strong></div>
+    <div class="alert-field"><span class="field-label">Phone push</span><strong id="ac-breach-push" class="field-val">SENT</strong></div>
+  </div>
+  <div class="alert-center-actions">
+    <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE</button>
+  </div>
+</div></section>
 <section class="panel"><div class="panel-head"><h2>Access protocol</h2><span class="badge">ZERO TRUST</span></div><label for="mode">Required custody combination</label><select id="mode"><option value="standard">Employee + Customer</option><option value="high-value">Two distinct Employees</option></select><div class="form-actions"><button id="reset">Reset / apply protocol</button></div><p class="callout">A terminal verdict stays latched until reset. This console reports a policy decision; it does not directly actuate a door lock.</p></section></div></div>'''
 
 ENROLLMENT = f'''
@@ -102,8 +122,23 @@ LOGS = '''<section class="panel"><div class="panel-head"><h2 class="section-labe
 CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">THREAT SIMULATION LAB</h2><span class="badge">ISOLATED PREVIEW</span></div><p>Exercise the visual states without touching the live checkpoint or sending alerts.</p>
 <div class="sim-grid"><button data-simulate="spoof"><b>◈ Presentation spoof</b><small>Simulate a printed / replayed face</small></button><button data-simulate="intruder"><b>⌖ Unregistered intruder</b><small>Simulate an unknown identity</small></button><button data-simulate="timeout"><b>◷ Single-custody timeout</b><small>Run the complete 5.0s window</small></button><button data-simulate="granted"><b>✓ Valid dual custody</b><small>Preview the granted state</small></button></div>
 <div class="sim-result" id="sim-result" role="status">Select a scenario to begin.</div>{dial('sim-timer')}<p class="callout">All results in this panel are synthetic. No biometric decisions, evidence records, push notifications, or WhatsApp messages are created.</p></section>
-<section class="panel"><div class="panel-head"><h2 class="section-label">DEVICE & NOTIFICATIONS</h2><span class="badge">PWA</span></div><p>Install the app, then register this device for generic security alerts. Biometric details never appear on the lock screen.</p><div class="camera-controls"><button class="primary" id="enable-push">Enable push alerts</button><button id="disable-push">Disable on this device</button><button data-install>Install app ↗</button></div><p class="callout">On iPhone, use Share → Add to Home Screen, then enable alerts from the installed app. Delivery depends on browser/OS permissions and configured VAPID keys.</p></section></div>
-<div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">INTEGRATION STATUS</h2><span class="badge">ADMIN ONLY</span></div><div class="config-grid"><div class="config-status">Storage<span id="storage-status">SIGN IN</span></div><div class="config-status">Biometric model<span id="facenet-status">NOT CHECKED</span></div><div class="config-status">WhatsApp<span id="whatsapp-status">NOT CHECKED</span></div><div class="config-status">Web Push<span id="push-status">NOT CHECKED</span></div><div class="config-status">Durable outbox<span id="outbox-status">NOT CHECKED</span></div></div><p class="callout">Supabase URL and server key are deployment-managed environment variables. Change them in Vercel and redeploy; the browser never receives privileged keys.</p></section>
+<section class="panel"><div class="panel-head"><h2 class="section-label">DEVICE & NOTIFICATIONS</h2><span class="badge">PWA</span></div><p>Install the app, then register this device for generic security alerts. Biometric details never appear on the lock screen.</p><div class="camera-controls"><button class="primary" id="enable-push">ENABLE PHONE ALERTS</button><button id="disable-push">Disable on this device</button><button data-install>Install app ↗</button></div>
+<div class="camera-controls" style="margin-top: 12px; gap: 8px;">
+  <button type="button" id="btn-test-siren" class="button" style="flex:1;">TEST SIREN 🔊</button>
+  <button type="button" id="btn-test-phone-push" class="primary" style="flex:1;">TEST PHONE ALERT 📱</button>
+</div>
+<p class="callout">On iPhone, use Share → Add to Home Screen, then enable alerts from the installed app. Delivery depends on browser/OS permissions and configured VAPID keys.</p></section></div>
+<div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">INTEGRATION STATUS</h2><span class="badge">ADMIN ONLY</span></div><div class="config-grid">
+  <div class="config-status">Backend<span id="backend-status">ONLINE</span></div>
+  <div class="config-status">Supabase<span id="storage-status">SIGN IN</span></div>
+  <div class="config-status">Camera<span id="camera-status">READY</span></div>
+  <div class="config-status">Biometric scanner<span id="facenet-status">READY</span></div>
+  <div class="config-status">Alarm audio<span id="audio-status">READY</span></div>
+  <div class="config-status">Phone Push<span id="push-status">NOT CHECKED</span></div>
+  <div class="config-status">This device<span id="device-sub-status">NOT CHECKED</span></div>
+  <div class="config-status">Active push subscriptions<span id="subs-count">0</span></div>
+  <div class="config-status">Audit chain<span id="audit-status">VERIFIED</span></div>
+</div><p class="callout">Supabase URL and server key are deployment-managed environment variables. Change them in Render and redeploy; the browser never receives privileged keys.</p></section>
 <section class="panel"><div class="panel-head"><h2 class="section-label">ALERT CREDENTIAL MANAGER</h2></div><form id="settings-form"><label>CallMeBot phone<input name="CALLMEBOT_PHONE" type="tel" placeholder="+ country code and number" autocomplete="off"></label><label>CallMeBot API key<input name="CALLMEBOT_API_KEY" type="password" placeholder="Leave blank to preserve existing key" autocomplete="new-password"></label><label>VAPID public key<input name="VAPID_PUBLIC_KEY" placeholder="Base64url public key" autocomplete="off"></label><label>VAPID private key<input name="VAPID_PRIVATE_KEY" type="password" placeholder="Never shared with the browser" autocomplete="new-password"></label><label>VAPID contact subject<input name="VAPID_SUBJECT" placeholder="mailto:security@example.com" autocomplete="off"></label><div class="form-actions"><button id="save-settings" class="primary" type="submit">Save encrypted settings</button></div></form></section></div></div>'''
 
 TITLES = {"checkpoint": ("SECURITY OPERATIONS / VAULT 01", "Live checkpoint", "Verify identities. Enforce dual custody. Seal every evidence trail."),

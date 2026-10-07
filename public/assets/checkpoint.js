@@ -23,6 +23,8 @@ import {
   evaluateSecurityEvent,
   getActiveAlert,
   clearActiveAlert,
+  subscribePush,
+  getPushSubscription,
 } from "./alerts.js";
 
 let stopCamera = null;
@@ -36,6 +38,8 @@ let manuallyStopped = false;
 let animFrameId = null;
 let trackCounter = 1;
 let tracks = [];
+// Prevents double-entry while async startCamera() is in flight
+let cameraStarting = false;
 
 const video = $("#camera");
 const canvas = $("#hud-overlay");
@@ -329,12 +333,19 @@ function display(result) {
   $("#lock-state").textContent = state === "GRANTED" ? "UNLOCKED" : "LOCKED";
   $("#face-count").textContent = result.faces?.length ?? result.parties?.length ?? "0";
 
+  // FIX: When face_count is 0, always show NO FACE — never REJECTED
   if (result.quality) {
-    $("#liveness").textContent = result.quality.face_count
-      ? result.quality.texture_ok
-        ? "PASS"
-        : "REJECTED"
-      : "NO FACE";
+    const faceCount = result.quality.face_count || 0;
+    const livenessEl = $("#liveness");
+    if (livenessEl) {
+      if (faceCount === 0) {
+        livenessEl.textContent = "NO FACE";
+      } else if (!result.quality.texture_ok) {
+        livenessEl.textContent = "REJECTED";
+      } else {
+        livenessEl.textContent = "PASS";
+      }
+    }
   }
 
   for (let i = 0; i < 2; i++) {
@@ -375,10 +386,12 @@ function updateAlertCenterUI() {
   const alert = getActiveAlert();
   const alertCard = $("#critical-alert-card");
   const alertBadge = $("#alert-center-badge");
+  const standbyBox = $("#alert-center-standby");
+  const breachBox = $("#alert-center-breach");
   const alarmIndicator = $("#alarm-state-indicator");
   const ackBtn = $("#btn-ack-alert");
 
-  if (alert && !state.includes("GRANTED") && state !== "STANDBY") {
+  if (alert && state !== "GRANTED" && state !== "STANDBY") {
     if (alertCard) {
       alertCard.hidden = false;
       $("#alert-code").textContent = `${alert.title} · ${alert.code}`;
@@ -386,19 +399,27 @@ function updateAlertCenterUI() {
       $("#alert-message").textContent = `${alert.reason.toUpperCase()} · EVIDENCE CAPTURED · ACCESS LOCKED`;
       if (ackBtn) {
         ackBtn.classList.toggle("acknowledged", alert.acknowledged);
-        ackBtn.textContent = alert.acknowledged ? "ACKNOWLEDGED ✓" : "ACKNOWLEDGE ALERT";
+        ackBtn.textContent = alert.acknowledged ? "ACKNOWLEDGED ✓" : "ACKNOWLEDGE";
       }
     }
-    if (alertBadge) {
-      alertBadge.textContent = "BREACH ACTIVE";
-      alertBadge.className = "badge BREACH";
+    if (standbyBox) standbyBox.hidden = true;
+    if (breachBox) {
+      breachBox.hidden = false;
+      if ($("#ac-breach-title")) $("#ac-breach-title").textContent = `${alert.code} · ${alert.title}`;
+      if ($("#ac-breach-time")) $("#ac-breach-time").textContent = alert.timestamp;
+      if ($("#ac-breach-alarm")) {
+        $("#ac-breach-alarm").textContent = isAlarmActive() ? "SOUNDING" : alert.acknowledged ? "ACKNOWLEDGED" : "SILENT";
+      }
+      if ($("#ac-breach-push")) $("#ac-breach-push").textContent = "SENT";
     }
-    if (alarmIndicator) {
-      alarmIndicator.textContent = isAlarmActive() ? "SOUNDING 🔊" : alert.acknowledged ? "ACKNOWLEDGED" : "SILENT";
-      alarmIndicator.style.color = isAlarmActive() ? "#ef4444" : "#91a5bc";
+    if (alertBadge) {
+      alertBadge.textContent = "BREACH";
+      alertBadge.className = "badge BREACH";
     }
   } else {
     if (alertCard) alertCard.hidden = true;
+    if (standbyBox) standbyBox.hidden = false;
+    if (breachBox) breachBox.hidden = true;
     if (alertBadge) {
       alertBadge.textContent = state === "WAITING" ? "STANDBY / WAITING" : "STANDBY";
       alertBadge.className = "badge";
@@ -417,18 +438,24 @@ function updateMuteButton() {
   const btn = $("#toggle-mute");
   if (btn) {
     const muted = isMuted();
-    btn.textContent = muted ? "SIREN: MUTED" : "SIREN: ACTIVE";
+    btn.textContent = muted ? "SIREN MUTED" : "SIREN ON";
     btn.style.color = muted ? "var(--muted)" : "var(--cyan)";
   }
 }
 
 function updateNotifButton() {
-  const btn = $("#btn-enable-notifs");
-  if (btn) {
-    const enabled = areNotificationsEnabled();
-    btn.textContent = enabled ? "NOTIFS: ACTIVE" : "ENABLE NOTIFS";
-    btn.style.color = enabled ? "var(--green)" : "var(--muted)";
-  }
+  const phoneIndicator = $("#phone-push-indicator");
+  const phoneBtn = $("#btn-enable-phone");
+  getPushSubscription().then((sub) => {
+    if (phoneIndicator) {
+      phoneIndicator.textContent = sub ? "ACTIVE" : "NOT CONFIGURED";
+      phoneIndicator.style.color = sub ? "var(--green)" : "#91a5bc";
+    }
+    if (phoneBtn) {
+      phoneBtn.textContent = sub ? "PHONE ALERTS: ACTIVE" : "ENABLE PHONE ALERTS";
+      phoneBtn.style.color = sub ? "var(--green)" : "var(--muted)";
+    }
+  }).catch(() => {});
 }
 
 /* =========================================================
@@ -441,7 +468,9 @@ export async function beginSurveillance({ manual = false } = {}) {
     if (manual) toast("Reset the checkpoint before beginning surveillance.");
     return;
   }
-  if (stopCamera) return;
+  // Prevent double-entry: guard both stopCamera (already running) and
+  // cameraStarting (async gap while getUserMedia is in flight)
+  if (stopCamera || cameraStarting) return;
 
   if (manual) {
     manuallyStopped = false;
@@ -449,14 +478,57 @@ export async function beginSurveillance({ manual = false } = {}) {
     return;
   }
 
+  if (!video) return;
+
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+
+  // Check permission state to provide early user feedback without
+  // triggering a permission prompt on unsupported browsers
+  if (!manual && navigator.permissions?.query) {
+    try {
+      const perm = await navigator.permissions.query({ name: "camera" });
+      if (perm.state === "denied") {
+        const notice = $("#notice");
+        if (notice) notice.textContent = "CAMERA BLOCKED · Allow camera in browser settings, then click Start Surveillance";
+        return;
+      }
+    } catch { /* permissions API not supported — continue */ }
+  }
+
+  cameraStarting = true;
+  console.log("[VERITAS CAMERA] CAMERA_INIT_START");
+
   try {
     stopCamera = await startCamera(video, $("#camera-empty"));
+    console.log("[VERITAS CAMERA] CAMERA_PERMISSION_GRANTED");
+    console.log("[VERITAS CAMERA] CAMERA_STREAM_READY");
+
     if ($("#stop-camera")) $("#stop-camera").disabled = false;
     if ($("#start-camera")) $("#start-camera").disabled = true;
+
+    // Clear any previous notice
+    const notice = $("#notice");
+    if (notice) notice.textContent = "";
 
     if (!animFrameId) {
       animFrameId = requestAnimationFrame(renderOverlay);
     }
+
+    // Wait until video has dimensions and is playing
+    if (video.readyState < 2 || video.videoWidth === 0) {
+      await new Promise((resolve) => {
+        const onLoaded = () => {
+          video.removeEventListener("loadedmetadata", onLoaded);
+          resolve();
+        };
+        video.addEventListener("loadedmetadata", onLoaded, { once: true });
+        setTimeout(resolve, 600);
+      });
+    }
+
+    console.log("[VERITAS CAMERA] CAMERA_PLAYING");
 
     clearInterval(loop);
     loop = setInterval(scan, 1000);
@@ -464,15 +536,21 @@ export async function beginSurveillance({ manual = false } = {}) {
     // Initial immediate scan
     await scan();
   } catch (err) {
-    console.warn("[checkpoint] Camera initialization:", err);
+    console.warn("[VERITAS CAMERA] CAMERA_INIT_FAILED:", err.name, err.message);
+    stopCamera = null; // Ensure not left in inconsistent state
     if (manual) {
       toast(err.message || "Failed to start camera.");
     } else {
       const notice = $("#notice");
       if (notice) {
-        notice.textContent = "CAMERA PERMISSION REQUIRED · CLICK START SURVEILLANCE";
+        const isPermission = err.name === "NotAllowedError" || err.name === "PermissionDeniedError";
+        notice.textContent = isPermission
+          ? "CAMERA PERMISSION REQUIRED · CLICK START SURVEILLANCE"
+          : `CAMERA INITIALIZATION FAILED · ${err.message || "CLICK START SURVEILLANCE TO RETRY"}`;
       }
     }
+  } finally {
+    cameraStarting = false;
   }
 }
 
@@ -586,6 +664,22 @@ $("#btn-enable-notifs")?.addEventListener("click", async () => {
   updateNotifButton();
 });
 
+// Phone push subscription (in alert center panel)
+$("#btn-enable-phone")?.addEventListener("click", async () => {
+  const btn = $("#btn-enable-phone");
+  if (btn) btn.disabled = true;
+  try {
+    initAudio(); // Prime audio on user gesture
+    await subscribePush();
+    updateNotifButton();
+    toast("This device registered for security push notifications.");
+  } catch (err) {
+    toast(err.message || "Push registration failed.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
 document.addEventListener("vault-alarm-state", () => {
   updateAlertCenterUI();
 });
@@ -613,17 +707,32 @@ async function poll() {
 
 setInterval(poll, 1000);
 
+/**
+ * KEY FIX: vault-auth fires AFTER initialize() in common.js resolves and
+ * confirms a valid operator session. currentUser is populated at this point.
+ * This is the ONLY correct place to trigger automatic surveillance startup.
+ * The bare beginSurveillance() at module init (old code line 625) was the
+ * root cause of the camera not starting — currentUser was still null then.
+ */
 document.addEventListener("vault-auth", async () => {
   manuallyStopped = false;
   initAudio();
   await poll();
-  await beginSurveillance();
+  // Short delay to let the DOM settle before starting camera
+  setTimeout(() => beginSurveillance(), 200);
 });
 
-// Initialization
+// On module load: poll state, and if currentUser is already authenticated, start surveillance
 poll();
-beginSurveillance();
 updateAlertCenterUI();
+if (currentUser) {
+  setTimeout(() => beginSurveillance(), 200);
+}
+// Initialize liveness display to neutral state
+const _livenessEl = $("#liveness");
+if (_livenessEl && (!_livenessEl.textContent || _livenessEl.textContent === "—")) {
+  _livenessEl.textContent = "NO FACE";
+}
 
 setInterval(
   () =>

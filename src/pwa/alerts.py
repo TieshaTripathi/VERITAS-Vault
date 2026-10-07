@@ -19,6 +19,46 @@ def settings(store):
         "CALLMEBOT_PHONE", "CALLMEBOT_API_KEY", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT")}
 
 
+def ensure_vapid_keys(store):
+    cfg = settings(store)
+    if cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY"):
+        if not cfg.get("VAPID_SUBJECT"):
+            cfg["VAPID_SUBJECT"] = "mailto:security@veritas-vault.internal"
+        return cfg
+
+    # Check auto-generated keys in store
+    saved, _ = store.get("vapid:auto_keys")
+    if saved and saved.get("VAPID_PUBLIC_KEY") and saved.get("VAPID_PRIVATE_KEY"):
+        cfg["VAPID_PUBLIC_KEY"] = saved["VAPID_PUBLIC_KEY"]
+        cfg["VAPID_PRIVATE_KEY"] = saved["VAPID_PRIVATE_KEY"]
+        cfg["VAPID_SUBJECT"] = cfg.get("VAPID_SUBJECT") or saved.get("VAPID_SUBJECT", "mailto:security@veritas-vault.internal")
+        return cfg
+
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization
+
+    priv = ec.generate_private_key(ec.SECP256R1())
+    priv_num = priv.private_numbers().private_value
+    priv_bytes = priv_num.to_bytes(32, "big")
+    priv_b64 = base64.urlsafe_b64encode(priv_bytes).decode("utf-8").rstrip("=")
+
+    pub_bytes = priv.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )
+    pub_b64 = base64.urlsafe_b64encode(pub_bytes).decode("utf-8").rstrip("=")
+    subject = cfg.get("VAPID_SUBJECT") or "mailto:security@veritas-vault.internal"
+
+    auto_keys = {
+        "VAPID_PUBLIC_KEY": pub_b64,
+        "VAPID_PRIVATE_KEY": priv_b64,
+        "VAPID_SUBJECT": subject,
+    }
+    store.put("vapid:auto_keys", auto_keys)
+    cfg.update(auto_keys)
+    return cfg
+
+
 def valid_push_endpoint(endpoint):
     url = urlparse(endpoint)
     # Prevent a submitted subscription from turning the worker into an SSRF proxy.
@@ -34,7 +74,7 @@ def deliver(key, job, version):
     job = dict(job, lease_until=time.time() + 90)
     if not store.cas(key, version, job):
         return
-    config = settings(store)
+    config = ensure_vapid_keys(store)
     delivered = set(job.get("delivered", []))
     errors = []
     whatsapp_ready = bool(config["CALLMEBOT_API_KEY"] and config["CALLMEBOT_PHONE"])
@@ -54,6 +94,14 @@ def deliver(key, job, version):
             errors.append("whatsapp")
     if push_ready:
         from pywebpush import webpush, WebPushException
+        push_payload = json.dumps({
+            "title": "VERITAS SECURITY ALERT",
+            "body": f"{job.get('reason') or 'Unregistered identity detected at CP-MAIN-01.'} Access remains locked.",
+            "event_id": job.get("id", ""),
+            "reason_code": job.get("reason_code", "ZT-001"),
+            "url": "/logs",
+            "tag": job.get("id", "vault-security-alert"),
+        })
         for sub_key, sub in subscriptions:
             if sub_key in delivered:
                 continue
@@ -62,12 +110,18 @@ def deliver(key, job, version):
                 break
             try:
                 webpush(subscription_info=sub["subscription"],
-                        data=json.dumps({"title": "VERITAS security alert", "body": "A breach requires operator review.", "url": "/logs", "tag": job["id"]}),
+                        data=push_payload,
                         vapid_private_key=config["VAPID_PRIVATE_KEY"], vapid_claims={"sub": config["VAPID_SUBJECT"]}, timeout=10)
                 delivered.add(sub_key)
             except WebPushException as exc:
                 if exc.response is not None and exc.response.status_code in (404, 410):
                     store.put(sub_key, dict(sub, active=False))
+                    if store.cloud:
+                        try:
+                            ep = sub["subscription"]["endpoint"]
+                            store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{ep}", json={"enabled": False})
+                        except Exception:
+                            pass
                 else:
                     errors.append("push")
             except Exception:
@@ -78,6 +132,46 @@ def deliver(key, job, version):
                lease_until=0, next_at=time.time() + min(3600, 2 ** min(attempts, 10) * 5),
                status="ACCEPTED_BY_PROVIDER" if configured and not errors else "RETRY" if configured else "UNCONFIGURED")
     store.cas(key, version + 1, job)
+
+
+def send_test_push(store=None):
+    store = store or Store()
+    config = ensure_vapid_keys(store)
+    subscriptions = [(k, v) for k, v, _ in store.records("push:") if v.get("active")]
+    if not (config.get("VAPID_PRIVATE_KEY") and config.get("VAPID_PUBLIC_KEY")):
+        return {"sent": 0, "error": "VAPID keys not configured"}
+    from pywebpush import webpush, WebPushException
+    sent = 0
+    now_tag = f"test-{int(time.time())}"
+    payload = json.dumps({
+        "title": "VERITAS TEST ALERT",
+        "body": "Push channel operational.",
+        "url": "/logs",
+        "tag": now_tag,
+        "event_id": now_tag,
+    })
+    for sub_key, sub in subscriptions:
+        try:
+            webpush(
+                subscription_info=sub["subscription"],
+                data=payload,
+                vapid_private_key=config["VAPID_PRIVATE_KEY"],
+                vapid_claims={"sub": config["VAPID_SUBJECT"]},
+                timeout=10,
+            )
+            sent += 1
+        except WebPushException as exc:
+            if exc.response is not None and exc.response.status_code in (404, 410):
+                store.put(sub_key, dict(sub, active=False))
+                if store.cloud:
+                    try:
+                        ep = sub["subscription"]["endpoint"]
+                        store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{ep}", json={"enabled": False})
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    return {"sent": sent, "total": len(subscriptions)}
 
 
 def drain_outbox():

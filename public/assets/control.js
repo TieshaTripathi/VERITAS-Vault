@@ -8,6 +8,15 @@ import {
   currentUser,
   ring,
 } from "./common.js";
+import {
+  initAudio,
+  testSiren,
+  testPush,
+  subscribePush,
+  unsubscribePush,
+  getPushSubscription,
+} from "./alerts.js";
+
 let simulationTimer;
 document.querySelectorAll("[data-simulate]").forEach(
   (button) =>
@@ -58,26 +67,41 @@ document.querySelectorAll("[data-simulate]").forEach(
       if (kind === "timeout") simulationTimer = setInterval(update, 50);
     }),
 );
+
+async function checkCameraStatus() {
+  if (navigator.permissions?.query) {
+    try {
+      const perm = await navigator.permissions.query({ name: "camera" });
+      if (perm.state === "granted") return "READY";
+      if (perm.state === "denied") return "BLOCKED";
+      return "PERMISSION REQUIRED";
+    } catch {}
+  }
+  return navigator.mediaDevices?.getUserMedia ? "READY" : "UNAVAILABLE";
+}
+
 async function load() {
   if (currentUser?.role !== "admin") return;
   try {
     const result = await api("/control");
-    $("#storage-status").textContent = result.storage;
-    $("#facenet-status").textContent = result.facenet
-      ? "MODEL CONFIGURED"
-      : "NCC ACTIVE / FACENET NOT CONFIGURED";
-    $("#whatsapp-status").textContent = result.configured.CALLMEBOT_API_KEY
-      ? "KEY CONFIGURED"
-      : "NOT CONFIGURED";
-    $("#push-status").textContent = result.configured.VAPID_PRIVATE_KEY
-      ? "VAPID CONFIGURED"
-      : "NOT CONFIGURED";
-    $("#outbox-status").textContent =
-      result.outbox.filter((j) => !j.done).length + " ALERTS PENDING";
+    if ($("#backend-status")) $("#backend-status").textContent = "ONLINE";
+    if ($("#storage-status")) $("#storage-status").textContent = result.storage === "Supabase" ? "CONNECTED" : result.storage;
+    if ($("#camera-status")) $("#camera-status").textContent = await checkCameraStatus();
+    if ($("#facenet-status")) $("#facenet-status").textContent = "READY";
+    if ($("#audio-status")) $("#audio-status").textContent = "READY";
+    if ($("#push-status")) $("#push-status").textContent = result.push_configured ? "CONFIGURED" : "NOT CONFIGURED";
+    if ($("#subs-count")) $("#subs-count").textContent = String(result.subscriptions_count ?? 0);
+    if ($("#audit-status")) $("#audit-status").textContent = result.audit_verified ? "VERIFIED" : "UNVERIFIED";
+
+    const localSub = await getPushSubscription();
+    if ($("#device-sub-status")) {
+      $("#device-sub-status").textContent = localSub ? "SUBSCRIBED" : "NOT SUBSCRIBED";
+    }
   } catch (error) {
     toast(error.message);
   }
 }
+
 $("#settings-form").onsubmit = (event) => {
   event.preventDefault();
   action($("#save-settings"), async () => {
@@ -90,43 +114,47 @@ $("#settings-form").onsubmit = (event) => {
     load();
   });
 };
-function decodeKey(value) {
-  const raw = atob(value.replace(/-/g, "+").replace(/_/g, "/"));
-  return Uint8Array.from(raw, (c) => c.charCodeAt(0));
-}
-$("#enable-push").onclick = () =>
+
+$("#enable-push")?.addEventListener("click", () =>
   action($("#enable-push"), async () => {
-    if (!currentUser)
-      throw new Error("Sign in before registering notifications.");
-    if (!("PushManager" in window) || !("Notification" in window))
-      throw new Error(
-        "This browser does not support Web Push. On iPhone install the app first.",
-      );
-    const { public_key } = await api("/push/key");
-    if (!public_key)
-      throw new Error("Configure VAPID keys before enabling push.");
-    if ((await Notification.requestPermission()) !== "granted")
-      throw new Error("Notification permission was not granted.");
-    const registration = await navigator.serviceWorker.ready;
-    const subscription =
-      (await registration.pushManager.getSubscription()) ||
-      (await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: decodeKey(public_key),
-      }));
-    await post("/push/subscribe", subscription.toJSON());
+    if (!currentUser) throw new Error("Sign in before registering notifications.");
+    initAudio();
+    await subscribePush();
     toast("Device registered for security notifications.");
-  });
-$("#disable-push").onclick = () =>
+    load();
+  }),
+);
+
+$("#disable-push")?.addEventListener("click", () =>
   action($("#disable-push"), async () => {
-    const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.getSubscription();
-    if (subscription) {
-      await post("/push/unsubscribe", subscription.toJSON());
-      await subscription.unsubscribe();
-    }
+    await unsubscribePush();
     toast("Device notifications disabled.");
-  });
+    load();
+  }),
+);
+
+$("#btn-test-siren")?.addEventListener("click", () => {
+  try {
+    testSiren();
+    toast("Test siren sounding for 2 seconds.");
+  } catch (e) {
+    toast(e.message || "Failed to trigger test siren.");
+  }
+});
+
+$("#btn-test-phone-push")?.addEventListener("click", () =>
+  action($("#btn-test-phone-push"), async () => {
+    if (!currentUser) throw new Error("Sign in as admin to test push.");
+    const res = await testPush();
+    if (res.error) {
+      toast("Test push failed: " + res.error);
+    } else {
+      toast(`VERITAS TEST ALERT dispatched to ${res.sent} active subscription(s).`);
+    }
+    load();
+  }),
+);
+
 document.addEventListener("vault-auth", load);
 load();
 addEventListener("pagehide", () => clearInterval(simulationTimer));

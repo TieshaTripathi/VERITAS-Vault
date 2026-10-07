@@ -166,4 +166,25 @@ insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
 values('encrypted-evidence','encrypted-evidence',false,5242880,array['application/octet-stream'])
 on conflict(id) do update set public=false,file_size_limit=5242880,allowed_mime_types=array['application/octet-stream'];
 
+-- 11. Web Push Subscriptions Table
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id text,
+  endpoint text unique not null,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  device_label text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  enabled boolean not null default true
+);
+
+create index if not exists idx_push_subs_user on public.push_subscriptions(user_id);
+create index if not exists idx_push_subs_enabled on public.push_subscriptions(enabled);
+
+alter table public.push_subscriptions enable row level security;
+revoke all on public.push_subscriptions from anon, authenticated;
+grant select, insert, update, delete on public.push_subscriptions to service_role;
+
 commit;

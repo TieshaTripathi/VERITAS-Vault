@@ -286,6 +286,24 @@ CMD [".venv/bin/streamlit", "run", "dashboard/app.py", \
 
 ---
 
+## 📱 Mobile PWA & Web Push Notification Requirements
+
+### Android
+1. Open the production URL (`https://veritas-vault14.web.app`) in Chrome or a modern mobile browser.
+2. Tap **Install app** or use the browser menu → **Install app / Add to Home screen**.
+3. Sign in as an authorized operator or administrator.
+4. In the **Alert Center** or **Control Room**, tap **ENABLE PHONE ALERTS**.
+5. Grant notification permission when prompted.
+
+### iPhone / iPad (iOS 16.4+)
+1. Web Push on iOS requires adding the app to the Home Screen: In Safari, tap **Share** (`⎋`) → **Add to Home Screen**.
+2. Launch the installed PWA directly from the Home Screen icon (Web Push is only enabled in standalone PWA mode on iOS; Safari browser tabs alone do not support background push subscriptions).
+3. Sign in to your operator account.
+4. Tap **ENABLE PHONE ALERTS**.
+5. Allow notification permissions when prompted.
+
+---
+
 ## 🧪 Testing
 
 ```bash

@@ -417,3 +417,185 @@ def test_unknown_identity_breach_and_encrypted_evidence_metadata(client, monkeyp
     assert preview.headers.get("cache-control") == "no-store, private"
     assert preview.headers.get("x-content-type-options") == "nosniff"
 
+
+def test_push_endpoints_lifecycle_and_security(client):
+    """Verifies public key, subscribe auth check, subscription storage, duplicate update, and unsubscribe."""
+    # 1. Public key requires auth
+    res = client.get("/api/push/public-key")
+    assert res.status_code == 401
+
+    signin(client)
+    # 2. Public key returned for authenticated operator
+    key_res = client.get("/api/push/public-key")
+    assert key_res.status_code == 200
+    pub_key = key_res.json()["public_key"]
+    assert len(pub_key) > 20
+
+    # Key endpoint backward compatibility
+    assert client.get("/api/push/key").json()["public_key"] == pub_key
+
+    # 3. Valid subscription stored
+    sub_payload = {
+        "endpoint": "https://fcm.googleapis.com/fcm/send/test-device-token-123",
+        "keys": {
+            "p256dh": "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QT9EgVKA7Gh27YStRB",
+            "auth": "tBHItJI5svbpez7KI4CCXg",
+        },
+        "device_label": "Test Android Phone",
+    }
+    sub_res = client.post("/api/push/subscribe", json=sub_payload)
+    assert sub_res.status_code == 200
+    assert sub_res.json()["subscribed"] is True
+
+    # Check status
+    status_res = client.get("/api/push/status")
+    assert status_res.status_code == 200
+    assert status_res.json()["configured"] is True
+    assert status_res.json()["subscriptions"] >= 1
+
+    # 4. Duplicate endpoint updates rather than duplicates
+    sub_payload["device_label"] = "Updated Device Label"
+    sub_res2 = client.post("/api/push/subscribe", json=sub_payload)
+    assert sub_res2.status_code == 200
+    store = Store()
+    matching = [v for k, v, _ in store.records("push:") if v["subscription"]["endpoint"] == sub_payload["endpoint"] and v.get("active")]
+    assert len(matching) == 1
+    assert matching[0]["device_label"] == "Updated Device Label"
+
+    # 5. Unsubscribe
+    unsub_res = client.post("/api/push/unsubscribe", json={"endpoint": sub_payload["endpoint"], "keys": sub_payload["keys"]})
+    assert unsub_res.status_code == 200
+    assert unsub_res.json()["subscribed"] is False
+
+    matching_active = [v for k, v, _ in store.records("push:") if v["subscription"]["endpoint"] == sub_payload["endpoint"] and v.get("active")]
+    assert len(matching_active) == 0
+
+
+def test_push_test_admin_only(client):
+    """Verifies that POST /api/push/test is admin-only and triggers dispatch without creating a breach."""
+    # Unauthenticated rejected
+    assert client.post("/api/push/test").status_code == 401
+
+    signin(client)
+    res = client.post("/api/push/test")
+    assert res.status_code == 200
+    data = res.json()
+    assert "sent" in data
+    # Ensure no breach was created
+    cp = client.post("/api/checkpoint/tick").json()
+    assert cp["state"] != "BREACH"
+
+
+def test_breach_triggers_push_dispatch_and_waiting_granted_do_not(client, monkeypatch):
+    """Verifies BREACH queues an outbox job with push metadata, while WAITING and GRANTED do not queue jobs."""
+    signin(client)
+    client.post("/api/checkpoint/reset", json={})
+    store = Store()
+
+    # Clear old jobs
+    jobs_before = len([k for k, v, _ in store.records("job:") if not v.get("done")])
+
+    # 1. WAITING state (single valid party): policy transition returns terminal=False, no alert job
+    store.enroll({"id": "EMP-99", "name": "Alice Guard", "role": "Employee", "created_at": time.time()})
+    person = store.personnel()[0]
+    face = dict(id=person["id"], name=person["name"], role=person["role"], is_recognized=True, is_live=True, confidence=0.95, pad_status="PASS", bbox=[10, 10, 50, 50])
+    st_waiting, term_waiting = advance(fresh(), [face], time.time())
+    assert st_waiting["state"] == "WAITING"
+    assert term_waiting is False
+
+    # 2. GRANTED state (dual custody satisfied): terminal=True, but state is GRANTED, so no breach alert job
+    person2 = dict(id="CUST-01", name="Bob Customer", role="Customer", created_at=time.time())
+    store.enroll(person2)
+    face2 = dict(id=person2["id"], name=person2["name"], role=person2["role"], is_recognized=True, is_live=True, confidence=0.92, pad_status="PASS", bbox=[60, 10, 100, 50])
+    st_granted, term_granted = advance(st_waiting, [face2], time.time() + 1.0)
+    assert st_granted["state"] == "GRANTED"
+    assert term_granted is True
+
+    # Checkpoint transition directly with GRANTED faces produces no breach alert job
+    res_granted, _ = backend.transition([face, face2])
+    assert res_granted["state"] == "GRANTED"
+    jobs_after_granted = [v for k, v, _ in store.records("job:") if not v.get("done")]
+    assert len(jobs_after_granted) == jobs_before
+
+    # Reset
+    client.post("/api/checkpoint/reset", json={})
+
+    # 3. Unknown identity triggers terminal BREACH: MUST create alert job with ZT-001
+    unknown_face = dict(id="unknown-x", name="Unknown", role="Unknown", is_recognized=False, is_live=True, confidence=0.1, pad_status="PASS", bbox=[10, 10, 50, 50])
+    monkeypatch.setattr(backend, "recognize", lambda f, p: ([unknown_face], {"texture_ok": True, "face_count": 1}))
+    res_breach = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert res_breach.status_code == 200
+    assert res_breach.json()["state"] == "BREACH"
+
+    jobs_after_breach = [v for k, v, _ in store.records("job:") if not v.get("done") and v.get("reason_code") == "ZT-001"]
+    assert len(jobs_after_breach) >= 1
+    latest_job = jobs_after_breach[-1]
+    assert latest_job["reason_code"] == "ZT-001"
+    assert "Unregistered" in latest_job["reason"]
+
+
+def test_dead_subscription_disables_it_and_delivery_failure_does_not_block_breach(client, monkeypatch):
+    """Verifies that 410 Gone from Web Push marks subscription inactive without breaking access or breach flow."""
+    from src.pwa import alerts
+    from pywebpush import WebPushException
+    signin(client)
+    store = Store()
+
+    # Store a dummy active subscription
+    sub_key = "push:dead-endpoint-test"
+    sub_data = {
+        "subscription": {"endpoint": "https://fcm.googleapis.com/fcm/send/dead-device", "keys": {"p256dh": "dummy", "auth": "dummy"}},
+        "active": True,
+        "owner": "admin",
+    }
+    store.put(sub_key, sub_data)
+
+    class Mock410Response:
+        status_code = 410
+
+    def mock_webpush_fail(*args, **kwargs):
+        raise WebPushException("Subscription has expired or is invalid", response=Mock410Response())
+
+    monkeypatch.setattr(alerts, "ensure_vapid_keys", lambda s: {
+        "VAPID_PUBLIC_KEY": "pub", "VAPID_PRIVATE_KEY": "priv", "VAPID_SUBJECT": "mailto:sec@example.com",
+        "CALLMEBOT_PHONE": "", "CALLMEBOT_API_KEY": ""
+    })
+    import pywebpush
+    monkeypatch.setattr(pywebpush, "webpush", mock_webpush_fail)
+
+    job = {"id": "test-dead-sub-job", "done": False, "attempts": 0, "reason": "Test breach", "reason_code": "ZT-001"}
+    store.put("job:test-dead-sub-job", job)
+
+    # Deliver should catch 410 and mark subscription active=False
+    alerts.deliver("job:test-dead-sub-job", job, 0)
+    saved_sub, _ = store.get(sub_key)
+    assert saved_sub["active"] is False
+
+
+def test_frontend_files_contain_correct_notification_and_camera_handlers():
+    """Verifies checkpoint.js, alerts.js, and sw.js contain required UI and camera logic."""
+    cp_text = (ROOT / "public" / "assets" / "checkpoint.js").read_text(encoding="utf-8")
+    alerts_text = (ROOT / "public" / "assets" / "alerts.js").read_text(encoding="utf-8")
+    sw_text = (ROOT / "public" / "sw.js").read_text(encoding="utf-8")
+
+    # Camera state logging
+    assert "CAMERA_INIT_START" in cp_text
+    assert "CAMERA_PERMISSION_GRANTED" in cp_text
+    assert "CAMERA_STREAM_READY" in cp_text
+    assert "CAMERA_PLAYING" in cp_text
+    assert "CAMERA_INIT_FAILED" in cp_text
+
+    # Liveness NO FACE initial handling
+    assert 'NO FACE' in cp_text
+
+    # Web Push exports in alerts.js
+    assert "subscribePush" in alerts_text
+    assert "getPushSubscription" in alerts_text
+    assert "testPush" in alerts_text
+    assert "testSiren" in alerts_text
+
+    # Service worker dynamic notification tags
+    assert "payload.event_id" in sw_text
+    assert "payload.title" in sw_text
+
+

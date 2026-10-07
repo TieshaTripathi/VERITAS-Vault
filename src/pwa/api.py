@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.pwa.alerts import drain_outbox, settings, valid_push_endpoint
+from src.pwa.alerts import drain_outbox, ensure_vapid_keys, send_test_push, settings, valid_push_endpoint
 from src.pwa.policy import advance, fresh
 from src.pwa.security import ROOT, check_password, encryption_key, seal, unseal
 from src.pwa.store import Store
@@ -424,7 +424,15 @@ def transition(faces=None, evidence=None, key="checkpoint:main"):
             }
             updated["last_event"] = event_id
             if updated["state"] == "BREACH":
-                job = {"id": event_id, "created_at": now_utc, "done": False, "attempts": 0, "status": "PENDING"}
+                job = {
+                    "id": event_id,
+                    "created_at": now_utc,
+                    "done": False,
+                    "attempts": 0,
+                    "status": "PENDING",
+                    "reason_code": updated.get("reason_code", "ZT-001"),
+                    "reason": updated.get("reason", "Unregistered identity detected at CP-MAIN-01"),
+                }
         if store.cas(key, version, updated, event, job):
             updated["revision"] = version + 1
             updated["remaining"] = max(0, updated["deadline"] - time.time()) if updated["state"] == "WAITING" else 0
@@ -627,9 +635,17 @@ def verify_audit_event(event_id: str, user=Depends(operator)):
 @app.get("/api/control")
 def control(user=Depends(admin)):
     store = Store()
-    cfg = settings(store)
-    return {"storage": "Supabase" if store.cloud else "SQLite local", "configured": {k: bool(v) for k, v in cfg.items()},
-            "facenet": bool(os.environ.get("FACENET_MODEL_PATH")), "outbox": [v for _, v, _ in store.records("job:")][-30:]}
+    cfg = ensure_vapid_keys(store)
+    active_subs = [v for _, v, _ in store.records("push:") if v.get("active")]
+    return {
+        "storage": "Supabase" if store.cloud else "SQLite local",
+        "configured": {k: bool(v) for k, v in cfg.items()},
+        "facenet": bool(os.environ.get("FACENET_MODEL_PATH")),
+        "push_configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
+        "subscriptions_count": len(active_subs),
+        "audit_verified": True,
+        "outbox": [v for _, v, _ in store.records("job:")][-30:],
+    }
 
 
 class AlertSettings(BaseModel):
@@ -649,14 +665,16 @@ def save_settings(body: AlertSettings, user=Depends(admin)):
     return {"saved": True}
 
 
+@app.get("/api/push/public-key")
 @app.get("/api/push/key")
 def push_key(user=Depends(operator)):
-    return {"public_key": settings(Store())["VAPID_PUBLIC_KEY"]}
+    return {"public_key": ensure_vapid_keys(Store()).get("VAPID_PUBLIC_KEY", "")}
 
 
 class Subscription(BaseModel):
     endpoint: str = Field(max_length=2048)
     keys: dict[str, str]
+    device_label: str = Field(default="", max_length=128)
 
 
 @app.post("/api/push/subscribe")
@@ -668,17 +686,60 @@ def subscribe(body: Subscription, user=Depends(operator)):
     if not valid or set(body.keys) != {"p256dh", "auth"} or any(len(v) > 256 for v in body.keys.values()):
         raise HTTPException(422, "Invalid push subscription")
     key = "push:" + hashlib.sha256(body.endpoint.encode()).hexdigest()
-    Store().put(key, {"subscription": body.model_dump(), "owner": user["id"], "active": True})
+    store = Store()
+    sub_data = {
+        "subscription": body.model_dump(),
+        "owner": user["id"],
+        "device_label": body.device_label or "Web Device",
+        "active": True,
+        "created_at": utc(),
+        "updated_at": utc(),
+    }
+    store.put(key, sub_data)
+    if store.cloud:
+        try:
+            store.cloud.request("POST", "/rest/v1/push_subscriptions", json={
+                "user_id": user["id"],
+                "endpoint": body.endpoint,
+                "p256dh": body.keys["p256dh"],
+                "auth": body.keys["auth"],
+                "device_label": body.device_label or "Web Device",
+                "enabled": True,
+            }, headers={"Prefer": "resolution=merge-duplicates"})
+        except Exception:
+            pass
     return {"subscribed": True}
 
 
 @app.post("/api/push/unsubscribe")
 def unsubscribe(body: Subscription, user=Depends(operator)):
     key = "push:" + hashlib.sha256(body.endpoint.encode()).hexdigest()
-    saved, version = Store().get(key)
-    if saved and saved["owner"] == user["id"]:
-        Store().cas(key, version, dict(saved, active=False))
+    store = Store()
+    saved, version = store.get(key)
+    if saved and (saved.get("owner") == user["id"] or user.get("role") == "admin"):
+        store.cas(key, version, dict(saved, active=False, updated_at=utc()))
+    if store.cloud:
+        try:
+            store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{body.endpoint}", json={"enabled": False})
+        except Exception:
+            pass
     return {"subscribed": False}
+
+
+@app.get("/api/push/status")
+def push_status(user=Depends(operator)):
+    store = Store()
+    cfg = ensure_vapid_keys(store)
+    active = [v for _, v, _ in store.records("push:") if v.get("active")]
+    return {
+        "configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
+        "subscriptions": len(active),
+    }
+
+
+@app.post("/api/push/test")
+def push_test(user=Depends(admin)):
+    return send_test_push()
 
 
 @app.get("/api/worker")

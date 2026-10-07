@@ -3,6 +3,8 @@
  * Zero-Trust physical security response subsystem.
  */
 
+import { api, post } from "./common.js";
+
 let audioCtx = null;
 let sirenOsc = null;
 let sirenGain = null;
@@ -11,6 +13,7 @@ let autoStopTimer = null;
 let isAlarmSounding = false;
 let currentAlert = null;
 let lastNotifiedEventId = null;
+const notifiedEventIds = new Set();
 
 const STORAGE_KEY_MUTED = "vault_alarm_muted";
 const STORAGE_KEY_NOTIFS = "vault_notifications_enabled";
@@ -173,12 +176,26 @@ export function acknowledgeAlert() {
   return currentAlert;
 }
 
+export function getAudioState() {
+  if (isMuted()) return "SIREN MUTED";
+  if (isAlarmSounding) return "SIREN SOUNDING";
+  if (audioCtx && audioCtx.state === "running") return "SIREN READY";
+  if (audioCtx && audioCtx.state === "suspended") return "SIREN BLOCKED BY BROWSER";
+  return "SIREN READY";
+}
+
+export function testSiren() {
+  initAudio();
+  startAlarm({ duration: 2000 });
+}
+
 export async function sendSecurityNotification({ title, body, eventId }) {
   if (!areNotificationsEnabled()) return;
-  if (eventId && lastNotifiedEventId === eventId) return;
+  if (eventId && (lastNotifiedEventId === eventId || notifiedEventIds.has(eventId))) return;
 
   if (eventId) {
     lastNotifiedEventId = eventId;
+    notifiedEventIds.add(eventId);
   }
 
   try {
@@ -192,6 +209,7 @@ export async function sendSecurityNotification({ title, body, eventId }) {
           tag: eventId || "vault-security-breach",
           renotify: true,
           requireInteraction: true,
+          data: { url: "/logs", event_id: eventId },
         });
         return;
       }
@@ -205,6 +223,90 @@ export async function sendSecurityNotification({ title, body, eventId }) {
   } catch (err) {
     console.warn("[alerts] Browser notification delivery failed:", err);
   }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+export async function getPushSubscription() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  } catch {
+    return null;
+  }
+}
+
+export async function subscribePush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    throw new Error("Web Push is not supported in this browser. On iPhone, add to Home Screen first.");
+  }
+
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") {
+    throw new Error("Notification permission was not granted.");
+  }
+  localStorage.setItem(STORAGE_KEY_NOTIFS, "true");
+
+  let publicKey;
+  try {
+    const res = await api("/push/public-key");
+    publicKey = res.public_key;
+  } catch {
+    const res = await api("/push/key");
+    publicKey = res.public_key;
+  }
+
+  if (!publicKey) {
+    throw new Error("Push notifications are not configured on the server.");
+  }
+
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+  }
+
+  const subJson = sub.toJSON();
+  const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  await post("/push/subscribe", {
+    endpoint: sub.endpoint,
+    keys: subJson.keys,
+    device_label: isMobile ? "Phone / PWA Device" : "Workstation Browser",
+  });
+
+  dispatchAlertEvent("vault-push-subscribed", sub);
+  return sub;
+}
+
+export async function unsubscribePush() {
+  const sub = await getPushSubscription();
+  if (sub) {
+    try {
+      await post("/push/unsubscribe", { endpoint: sub.endpoint, keys: sub.toJSON().keys });
+    } catch {}
+    try {
+      await sub.unsubscribe();
+    } catch {}
+  }
+  dispatchAlertEvent("vault-push-unsubscribed", null);
+  return true;
+}
+
+export async function testPush() {
+  return await post("/push/test", {});
 }
 
 /**
