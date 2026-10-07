@@ -12,7 +12,11 @@ from src.storage.supabase_client import SupabaseCloud, CloudUnavailable
 
 class Store:
     def __init__(self):
-        url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY")
+        url = os.environ.get("SUPABASE_URL")
+        key = (
+            os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_KEY")
+        )
         if bool(url) != bool(key):
             raise CloudUnavailable("Both Supabase settings must be configured")
         self.cloud = SupabaseCloud() if url and key else None

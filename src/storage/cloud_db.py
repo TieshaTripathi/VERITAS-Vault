@@ -43,14 +43,14 @@ def _load_credentials() -> Tuple[Optional[str], Optional[str]]:
     (url, key) or (None, None) when not configured.
     """
     url = os.environ.get("SUPABASE_URL", "").strip()
-    key = os.environ.get("SUPABASE_KEY", "").strip()
+    key = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "") or os.environ.get("SUPABASE_KEY", "")).strip()
 
     if not (url and key) and os.path.exists(_CONFIG_PATH):
         try:
             with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
                 cfg = json.load(fh)
             url = url or cfg.get("SUPABASE_URL", "").strip()
-            key = key or cfg.get("SUPABASE_KEY", "").strip()
+            key = key or cfg.get("SUPABASE_SERVICE_ROLE_KEY", "").strip() or cfg.get("SUPABASE_KEY", "").strip()
         except Exception as exc:
             print(f"[cloud_db] Config read error: {exc}")
 

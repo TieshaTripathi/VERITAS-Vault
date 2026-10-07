@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "FACENET_MODEL_PATH", "CALLMEBOT_API_KEY", "CALLMEBOT_PHONE", "VAPID_PRIVATE_KEY"):
+    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "FACENET_MODEL_PATH", "CALLMEBOT_API_KEY", "CALLMEBOT_PHONE", "VAPID_PRIVATE_KEY"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"T" * 32).decode())
@@ -72,7 +72,10 @@ def test_auth_csrf_logout_and_admin_boundary(client):
     Store().cas(key, version, record)
     assert client.get("/api/control").status_code == 403
     assert client.get("/api/logs").status_code == 200
-    client.post("/api/auth/logout")
+    logout_res = client.post("/api/auth/logout")
+    assert logout_res.status_code == 200
+    logout_cookie = logout_res.headers.get("set-cookie", "").lower()
+    assert "httponly" in logout_cookie and "samesite=none" in logout_cookie and "secure" in logout_cookie
     assert client.get("/api/logs").status_code == 401
 
 
@@ -232,8 +235,81 @@ def test_firebase_render_cors_and_csp(client):
     assert res_opt.headers.get("access-control-allow-origin") == prod_origin
     assert res_opt.headers.get("access-control-allow-credentials") == "true"
 
+    # Preflight OPTIONS request from disallowed origin does not allow origin
+    res_bad_opt = client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "https://attacker.invalid",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type, X-Vault-Request",
+        },
+    )
+    assert res_bad_opt.headers.get("access-control-allow-origin") != "https://attacker.invalid"
+
+    # POST from disallowed origin is denied
+    res_bad_post = client.post(
+        "/api/auth/login",
+        json={"username": "test-operator", "password": "wrong"},
+        headers={"Origin": "https://attacker.invalid"},
+    )
+    assert res_bad_post.status_code == 403
+
     # CSP header on response allows Render backend in connect-src
     health_res = client.get("/api/health")
     assert health_res.status_code == 200
     csp = health_res.headers.get("content-security-policy", "")
     assert "connect-src 'self' https://veritas-vault-backend.onrender.com" in csp
+
+
+def test_supabase_service_role_key_regression_no_503(monkeypatch):
+    """Regression test: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY without SUPABASE_KEY must initialize Store.cloud without 503/CloudUnavailable."""
+    from src.storage.supabase_client import SupabaseCloud
+    monkeypatch.setenv("SUPABASE_URL", "https://ppnfoogpapokpgmarttl.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_key")
+    monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    monkeypatch.delenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+
+    store = Store()
+    assert store.cloud is not None
+    assert isinstance(store.cloud, SupabaseCloud)
+    assert store.cloud.url == "https://ppnfoogpapokpgmarttl.supabase.co"
+    assert store.cloud.key == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_key"
+
+
+def test_login_with_service_role_key_returns_auth_error_not_503(monkeypatch, tmp_path):
+    """Proves wrong-password login produces 401 auth error, NOT 503 infrastructure failure when only SUPABASE_SERVICE_ROLE_KEY is set."""
+    from src.storage.supabase_client import SupabaseCloud
+    monkeypatch.setenv("SUPABASE_URL", "https://ppnfoogpapokpgmarttl.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_key")
+    monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    monkeypatch.delenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", raising=False)
+    monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"T" * 32).decode())
+    monkeypatch.setenv("APP_ORIGIN", "https://testserver")
+
+    # Mock cloud requests offline: rate_limit CAS/get and Supabase auth token
+    def mock_request(self, method, path, **kwargs):
+        if "/auth/v1/token" in path:
+            raise CloudUnavailable("Invalid credentials from identity provider")
+        if "/rpc/vault_commit" in path:
+            mock_resp = type("Response", (), {"json": lambda s: True})()
+            return mock_resp
+        if "/rest/v1/vault_records" in path:
+            mock_resp = type("Response", (), {"json": lambda s: []})()
+            return mock_resp
+        return type("Response", (), {"json": lambda s: {}})()
+
+    monkeypatch.setattr(SupabaseCloud, "request", mock_request)
+
+    test_client = TestClient(
+        backend.app,
+        base_url="https://testserver",
+        headers={"X-Vault-Request": "1", "Origin": "https://testserver"},
+    )
+    resp = test_client.post(
+        "/api/auth/login",
+        json={"username": "operator@example.com", "password": "wrong-password"},
+    )
+    assert resp.status_code == 401
+    assert "Unable to authenticate operator" in resp.json().get("detail", "")

@@ -182,7 +182,7 @@ def test_multisignal_pad_evaluation():
 
 
 def test_api_session_and_pep_verification(tmp_path, monkeypatch):
-    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "FACENET_MODEL_PATH"):
+    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "FACENET_MODEL_PATH"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"A" * 32).decode())
@@ -227,7 +227,7 @@ def test_api_session_and_pep_verification(tmp_path, monkeypatch):
 
 
 def test_checkpoint_frame_anti_replay(tmp_path, monkeypatch):
-    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "FACENET_MODEL_PATH"):
+    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "FACENET_MODEL_PATH"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"A" * 32).decode())

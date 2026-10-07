@@ -86,7 +86,6 @@ export function getSupabaseConfig(): SupabaseConfig {
   const key =
     env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
     env.SUPABASE_ANON_KEY ||
-    env.SUPABASE_KEY ||
     (typeof window !== "undefined" && (window as unknown as { __SUPABASE_ANON_KEY__?: string }).__SUPABASE_ANON_KEY__) ||
     "";
 

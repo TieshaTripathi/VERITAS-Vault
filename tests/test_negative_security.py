@@ -47,7 +47,7 @@ from src.vision.liveness import evaluate_multisignal_pad
 
 @pytest.fixture
 def sec_client(tmp_path, monkeypatch):
-    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "FACENET_MODEL_PATH"):
+    for key in ("VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "FACENET_MODEL_PATH"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"Z" * 32).decode())
