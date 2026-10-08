@@ -1340,3 +1340,215 @@ a.button:hover {
   from { box-shadow: 0 0 10px #ef444430; }
   to { box-shadow: 0 0 24px #ef444470; }
 }
+
+/* =========================================================
+   IN-APP EMERGENCY BREACH MODAL & ALERT CENTER STYLES
+   ========================================================= */
+
+.breach-modal {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  border: none;
+  background: transparent;
+  padding: 0;
+  z-index: 1000;
+  max-width: 90vw;
+}
+
+.breach-modal::backdrop {
+  background: rgba(3, 7, 18, 0.88);
+  backdrop-filter: blur(8px);
+}
+
+.bm-card {
+  background: #090e17;
+  border: 2px solid #ef4444;
+  border-radius: 14px;
+  padding: 24px 22px;
+  max-width: 420px;
+  width: 90vw;
+  box-shadow: 0 0 0 2px #ef444440, 0 0 40px rgba(239, 68, 68, 0.4);
+  text-align: center;
+  animation: emergency-pulse 1.8s infinite ease-in-out;
+}
+
+.bm-header {
+  margin-bottom: 16px;
+}
+
+.bm-icon {
+  font-size: 38px;
+  display: inline-block;
+  animation: warning-beacon 1.4s infinite ease-in-out;
+  margin-bottom: 4px;
+}
+
+.bm-title {
+  color: #ef4444;
+  font-family: 'Share Tech Mono', Consolas, monospace;
+  font-size: 20px;
+  letter-spacing: 2px;
+  margin: 4px 0 2px;
+  text-transform: uppercase;
+}
+
+.bm-subtitle {
+  color: #fca5a5;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  margin: 0 0 10px;
+}
+
+.bm-denied-badge {
+  display: inline-block;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.bm-body {
+  background: #040810;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+.bm-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #101c2b;
+  font-size: 12px;
+  font-family: Consolas, monospace;
+}
+
+.bm-meta-row:last-child {
+  border-bottom: none;
+}
+
+.bm-meta-label {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.bm-meta-val {
+  color: var(--text);
+}
+
+.bm-evidence-tag {
+  color: #10b981;
+  letter-spacing: 1px;
+}
+
+.bm-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bm-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-decoration: none;
+  font-family: Consolas, monospace;
+  transition: all 0.2s ease;
+}
+
+.bm-btn-evidence {
+  background: #00f0ff1a;
+  color: var(--cyan);
+  border: 1px solid var(--cyan);
+}
+
+.bm-btn-evidence:hover {
+  background: #00f0ff33;
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.3);
+}
+
+.bm-btn-ack {
+  background: #ef4444;
+  color: #ffffff;
+  border: 1px solid #ef4444;
+}
+
+.bm-btn-ack:hover {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.ac-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ac-btn.quiet {
+  background: transparent;
+  color: var(--muted);
+}
+
+.ac-btn.quiet:hover {
+  color: var(--text);
+  border-color: var(--cyan);
+}
+
+.view-ev-btn {
+  background: #00f0ff18;
+  color: var(--cyan);
+  border: 1px solid var(--cyan);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.view-ev-btn:hover {
+  background: #00f0ff30;
+}
+
+.evidence-tag {
+  color: #10b981;
+}
+
+@keyframes emergency-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px #ef444480, 0 0 25px rgba(239, 68, 68, 0.35);
+    border-color: #ef4444;
+  }
+  50% {
+    box-shadow: 0 0 0 4px #ef4444cc, 0 0 45px rgba(239, 68, 68, 0.65);
+    border-color: #f87171;
+  }
+}
+
+@keyframes warning-beacon {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 4px #ef4444);
+  }
+  50% {
+    transform: scale(1.12);
+    filter: drop-shadow(0 0 12px #ef4444);
+  }
+}

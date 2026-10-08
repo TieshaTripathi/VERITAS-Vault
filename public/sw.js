@@ -71,27 +71,50 @@ self.addEventListener("push", (event) => {
     payload = { body: event.data ? event.data.text() : "Security breach detected." };
   }
 
+  const title = payload.title || "VERITAS SECURITY ALERT";
+  const body = payload.body || "Security breach detected. Access locked.";
+  const eventId = payload.event_id || payload.tag || "vault-security-alert";
+  const targetUrl = payload.url || (eventId ? `/audit?event=${encodeURIComponent(eventId)}` : "/audit");
+
+  // Post message to open client windows so in-app breach popup/modal reacts immediately
   event.waitUntil(
-    self.registration.showNotification(
-      payload.title || "VERITAS SECURITY ALERT",
-      {
-        body: payload.body || "Security breach detected.",
-        icon: "/icons/icon-192.png",
-        badge: "/icons/icon-192.png",
-        tag: payload.event_id || payload.tag || "vault-security-alert",
-        requireInteraction: true,
-        data: {
-          url: payload.url || "/logs",
-          event_id: payload.event_id || payload.tag,
-        },
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({
+            type: "SECURITY_BREACH_PUSH",
+            payload: {
+              ...payload,
+              event_id: eventId,
+              url: targetUrl,
+            },
+          });
+        });
+      })
+      .catch(() => {}),
+  );
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/logo.svg",
+      tag: eventId,
+      renotify: true,
+      requireInteraction: true,
+      data: {
+        url: targetUrl,
+        event_id: eventId,
+        reason_code: payload.reason_code,
       },
-    ),
+    }),
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || "/logs";
+  const targetUrl = event.notification.data?.url || "/audit";
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })

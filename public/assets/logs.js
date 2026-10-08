@@ -37,6 +37,15 @@ async function load() {
       $(".inspect", tr).onclick = () => inspect(event);
       body.append(tr);
     }
+
+    // Auto-inspect event if specified in query parameter (?event=<event_id>)
+    const targetEventId = new URLSearchParams(window.location.search).get("event");
+    if (targetEventId && events.length > 0) {
+      const match = events.find((e) => e.id === targetEventId);
+      if (match) {
+        inspect(match);
+      }
+    }
   } catch (error) {
     toast(error.message);
   } finally {

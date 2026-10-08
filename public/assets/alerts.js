@@ -270,12 +270,35 @@ export async function subscribePush() {
     throw new Error("Push notifications are not configured on the server.");
   }
 
+  const serverKeyBytes = urlBase64ToUint8Array(publicKey);
   const reg = await navigator.serviceWorker.ready;
   let sub = await reg.pushManager.getSubscription();
+
+  // If existing subscription used a different server key, renew it
+  if (sub) {
+    const existingKey = sub.options?.applicationServerKey;
+    let keyMatches = false;
+    if (existingKey) {
+      const existingKeyBytes = new Uint8Array(existingKey);
+      if (
+        existingKeyBytes.length === serverKeyBytes.length &&
+        existingKeyBytes.every((b, i) => b === serverKeyBytes[i])
+      ) {
+        keyMatches = true;
+      }
+    }
+    if (!keyMatches) {
+      try {
+        await sub.unsubscribe();
+      } catch {}
+      sub = null;
+    }
+  }
+
   if (!sub) {
     sub = await reg.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
+      applicationServerKey: serverKeyBytes,
     });
   }
 
@@ -309,77 +332,97 @@ export async function testPush() {
   return await post("/push/test", {});
 }
 
+export const CRITICAL_REASON_CODES = ["ZT-001", "ZT-002", "ZT-008", "ZT-009", "ZT-013"];
+
 /**
  * Event Severity Classifier:
- * - CRITICAL: BREACH, ZT-001 (intruder), ZT-002 (spoof), ZT-008 (timeout), ZT-009 (replay), ZT-013 (integrity)
- * - WARNING: window expiring, camera degraded
- * - INFO: STANDBY, WAITING, GRANTED, RESET
+ * - Critical only: ZT-001, ZT-002, ZT-008, ZT-009, ZT-013 -> siren, breach modal, phone push
+ * - Non-alarm states: STANDBY, WAITING, GRANTED, RESET
  */
 export function evaluateSecurityEvent(result) {
   if (!result || typeof result !== "object") return;
 
-  const isBreach = result.state === "BREACH";
+  const state = result.state || "";
   const reasonCode = result.reason_code || "";
   const reason = result.reason || "";
   const hasUnrecognized = Array.isArray(result.faces) && result.faces.some((f) => !f.is_recognized);
   const hasSpoof = Array.isArray(result.faces) && result.faces.some((f) => !f.is_live);
 
-  const isCritical =
-    isBreach ||
-    ["ZT-001", "ZT-002", "ZT-008", "ZT-009", "ZT-013"].includes(reasonCode) ||
-    hasUnrecognized ||
-    hasSpoof;
+  // Do not alarm for STANDBY, WAITING, GRANTED, RESET
+  if (state === "STANDBY" || state === "WAITING" || state === "GRANTED" || state === "RESET") {
+    if (state === "GRANTED" || state === "RESET") {
+      stopAlarm();
+    }
+    if (state === "RESET" || state === "STANDBY") {
+      clearActiveAlert();
+    }
+    return;
+  }
+
+  // Critical breach detection
+  let code = reasonCode;
+  if (!code) {
+    if (hasSpoof || reason.toLowerCase().includes("spoof")) {
+      code = "ZT-002";
+    } else if (hasUnrecognized || reason.toLowerCase().includes("unregistered") || reason.toLowerCase().includes("unauthorized")) {
+      code = "ZT-001";
+    } else if (reason.toLowerCase().includes("expired") || reason.toLowerCase().includes("timeout")) {
+      code = "ZT-008";
+    } else if (reason.toLowerCase().includes("replay")) {
+      code = "ZT-009";
+    } else if (reason.toLowerCase().includes("integrity")) {
+      code = "ZT-013";
+    } else if (state === "BREACH") {
+      code = "ZT-001";
+    }
+  }
+
+  const isCritical = state === "BREACH" || CRITICAL_REASON_CODES.includes(code);
 
   if (isCritical) {
     const eventId =
       result.last_event ||
-      reasonCode ||
-      `BREACH-${result.state}-${Date.now()}`;
+      result.id ||
+      `BREACH-${code}-${Date.now()}`;
 
-    let code = reasonCode;
-    if (!code) {
-      if (hasUnrecognized || reason.toLowerCase().includes("unregistered")) {
-        code = "ZT-001";
-      } else if (hasSpoof || reason.toLowerCase().includes("spoof")) {
-        code = "ZT-002";
-      } else {
-        code = "ZT-BREACH";
-      }
-    }
-
-    const title =
+    const subtitle =
       code === "ZT-001"
-        ? "UNREGISTERED INTRUDER DETECTED"
+        ? "UNAUTHORIZED PERSON DETECTED"
         : code === "ZT-002"
-          ? "BIOMETRIC PRESENTATION ATTACK"
-          : "SECURITY ACCESS BREACH";
+          ? "BIOMETRIC SPOOF ATTACK"
+          : code === "ZT-008"
+            ? "CUSTODY TIMEOUT EXPIRED"
+            : code === "ZT-009"
+              ? "REPLAY ATTACK DETECTED"
+              : code === "ZT-013"
+                ? "CAPTURE INTEGRITY VIOLATION"
+                : "SECURITY BREACH DETECTED";
 
     currentAlert = {
       id: eventId,
       code,
-      title,
-      reason: reason || "Unregistered identity detected at vault checkpoint",
+      title: "SECURITY BREACH",
+      subtitle,
+      accessState: "ACCESS DENIED",
+      reason: reason || "Unauthorized person detected at vault checkpoint",
       timestamp: new Date().toLocaleTimeString(),
-      checkpoint: "CP-MAIN-01",
+      checkpoint: result.checkpoint_id || "CP-MAIN-01",
+      evidence: "CAPTURED",
       acknowledged: false,
       raw: result,
     };
 
-    // Trigger critical alarm sound
-    startAlarm({ duration: 12000 });
+    // Play Web Audio siren on critical breach
+    startAlarm({ duration: 15000 });
 
-    // Trigger browser notification
+    // Show OS Web Push notification if backgrounded/active
     sendSecurityNotification({
-      title: "VERITAS SECURITY ALERT",
-      body: `${title}\nReason: ${currentAlert.reason}\nCheckpoint: CP-MAIN-01\nAccess remains locked.`,
+      title: "⚠ SECURITY BREACH",
+      body: `${subtitle}\nCheckpoint: ${currentAlert.checkpoint}\nEvidence: CAPTURED · Access Denied`,
       eventId,
     });
 
     dispatchAlertEvent("vault-critical-alert", currentAlert);
-  } else if (result.state === "RESET" || result.state === "STANDBY") {
-    clearActiveAlert();
-  } else if (result.state === "GRANTED") {
-    stopAlarm();
   }
 }
 
@@ -393,3 +436,20 @@ function dispatchAlertEvent(name, detail) {
 ["click", "keydown", "touchstart"].forEach((evt) => {
   window.addEventListener(evt, initAudio, { once: true, passive: true });
 });
+
+// Bridge service worker background push alerts to in-app modal when PWA is open
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data?.type === "SECURITY_BREACH_PUSH") {
+      const p = event.data.payload || {};
+      evaluateSecurityEvent({
+        state: "BREACH",
+        reason_code: p.reason_code || "ZT-001",
+        reason: p.body || "Unauthorized person detected at CP-MAIN-01",
+        last_event: p.event_id,
+        checkpoint_id: "CP-MAIN-01",
+        evidence: { path: "captured" },
+      });
+    }
+  });
+}

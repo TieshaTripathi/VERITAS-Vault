@@ -23,7 +23,7 @@
     <div class="empty" id="camera-empty"><div class="reticle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 10 5-3v10l-5-3"/></svg></div><b>VAULT CHAMBER / CAM 01</b><p>Start the camera when you are ready.<br>Your browser will request camera permission.</p></div>
     <i class="hud-corner tl"></i><i class="hud-corner tr"></i><i class="hud-corner bl"></i><i class="hud-corner br"></i><i class="scanline"></i>
     <div class="camera-meta"><span>ENCRYPTED INGESTION</span><span>640 × 480 / LOCAL PREVIEW</span></div></div><div class="camera-controls"><button class="primary" id="start-camera">Start surveillance</button><button id="stop-camera" disabled>Stop camera</button><small>VIDEO STAYS LOCAL · SAMPLED FRAMES VERIFIED SERVER-SIDE</small></div>
-<div class="telemetry"><div class="stat"><span class="stat-label">DETECTED</span><strong id="face-count">—</strong></div><div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">—</strong></div><div class="stat"><span class="stat-label">ACCESS STATE</span><strong id="lock-state">LOCKED</strong></div></div></section>
+<div class="telemetry"><div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div><div class="stat"><span class="stat-label">DETECTED</span><strong id="face-count">—</strong></div><div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">—</strong></div><div class="stat"><span class="stat-label">ACCESS STATE</span><strong id="lock-state">LOCKED</strong></div></div></section>
 <div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / DUAL-CUSTODY VERIFICATION</h2><span class="badge">Δt ≤ 5.0s</span></div>
 <div class="party" id="party-0"><div class="avatar">1</div><div><strong>Awaiting identity</strong><small>Primary officer / customer</small></div></div>
 <div class="party" id="party-1"><div class="avatar">2</div><div><strong>Awaiting identity</strong><small>Second distinct party</small></div></div>
@@ -34,12 +34,12 @@
 <section class="panel" id="alert-center-panel"><div class="panel-head"><h2 class="section-label">03 / ALERT CENTER</h2><span class="badge" id="alert-center-badge">STANDBY</span></div>
 <div class="alert-center-box" id="alert-center-standby">
   <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Alarm sound</span><strong id="alarm-state-indicator" class="field-val">SILENT</strong></div>
-    <button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button>
+    <div class="alert-field"><span class="field-label">Alarm Sound</span><strong id="alarm-state-indicator" class="field-val">SILENT</strong></div>
+    <div class="ac-actions"><button type="button" id="btn-test-siren" class="ac-btn quiet">TEST SIREN 🔊</button><button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button></div>
   </div>
   <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Phone alerts</span><strong id="phone-push-indicator" class="field-val">NOT CONFIGURED</strong></div>
-    <button type="button" id="btn-enable-phone" class="ac-btn">ENABLE PHONE ALERTS</button>
+    <div class="alert-field"><span class="field-label">Phone Push</span><strong id="phone-push-indicator" class="field-val">NOT CONFIGURED</strong></div>
+    <div class="ac-actions"><button type="button" id="btn-test-push" class="ac-btn quiet">TEST PUSH 📱</button><button type="button" id="btn-enable-phone" class="ac-btn">ENABLE PHONE ALERTS</button></div>
   </div>
 </div>
 <div class="alert-center-box breach-box" id="alert-center-breach" hidden>
@@ -49,12 +49,42 @@
   </div>
   <div class="alert-center-row">
     <div class="alert-field"><span class="field-label">Alarm</span><strong id="ac-breach-alarm" class="field-val alarm-sounding">SOUNDING</strong></div>
-    <div class="alert-field"><span class="field-label">Phone push</span><strong id="ac-breach-push" class="field-val">SENT</strong></div>
+    <div class="alert-field"><span class="field-label">Phone Push</span><strong id="ac-breach-push" class="field-val">SENT</strong></div>
+    <div class="alert-field"><span class="field-label">Evidence</span><strong id="ac-breach-evidence" class="field-val evidence-tag">CAPTURED</strong></div>
   </div>
   <div class="alert-center-actions">
-    <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE</button>
+    <a href="/audit" id="btn-ac-view-evidence" class="ac-btn view-ev-btn">VIEW EVIDENCE 👁</a>
+    <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
   </div>
 </div></section>
+<dialog id="breach-modal" class="breach-modal" role="alertdialog" aria-modal="true" aria-labelledby="bm-title">
+  <div class="bm-card">
+    <div class="bm-header">
+      <span class="bm-icon" aria-hidden="true">⚠️</span>
+      <h2 id="bm-title" class="bm-title">SECURITY BREACH</h2>
+      <p class="bm-subtitle" id="bm-subtitle">UNAUTHORIZED PERSON DETECTED</p>
+      <div class="bm-denied-badge">ACCESS DENIED</div>
+    </div>
+    <div class="bm-body">
+      <div class="bm-meta-row">
+        <span class="bm-meta-label">Checkpoint:</span>
+        <strong class="bm-meta-val" id="bm-checkpoint">CP-MAIN-01</strong>
+      </div>
+      <div class="bm-meta-row">
+        <span class="bm-meta-label">Time:</span>
+        <strong class="bm-meta-val" id="bm-time">—</strong>
+      </div>
+      <div class="bm-meta-row">
+        <span class="bm-meta-label">Evidence:</span>
+        <strong class="bm-meta-val bm-evidence-tag" id="bm-evidence">CAPTURED</strong>
+      </div>
+    </div>
+    <div class="bm-actions">
+      <a href="/audit" id="bm-btn-view" class="bm-btn bm-btn-evidence">VIEW EVIDENCE 👁</a>
+      <button type="button" id="bm-btn-ack" class="bm-btn bm-btn-ack">ACKNOWLEDGE ALERT</button>
+    </div>
+  </div>
+</dialog>
 <section class="panel"><div class="panel-head"><h2>Access protocol</h2><span class="badge">ZERO TRUST</span></div><label for="mode">Required custody combination</label><select id="mode"><option value="standard">Employee + Customer</option><option value="high-value">Two distinct Employees</option></select><div class="form-actions"><button id="reset">Reset / apply protocol</button></div><p class="callout">A terminal verdict stays latched until reset. This console reports a policy decision; it does not directly actuate a door lock.</p></section></div></div></main>
 <footer class="footer"><span>VERITAS VAULT OPERATING CONSOLE</span><span>DUAL CUSTODY · ENCRYPTED EVIDENCE · AUDIT CHAIN</span></footer><div id="toast" class="toast" hidden role="status"></div>
 <dialog id="auth-dialog" aria-labelledby="auth-title"><button class="close" data-close aria-label="Close sign-in">&times;</button><p class="eyebrow">AUTHORIZED PERSONNEL ONLY</p><h2 id="auth-title">Operator authentication</h2><p>Use your Supabase operator email or the locally configured administrator account.</p><form id="auth-form"><label>Operator email / username<input id="username" required autocomplete="username"></label><label>Password<input id="password" required type="password" autocomplete="current-password"></label><p id="auth-error" role="alert"></p><div class="form-actions"><button class="primary" type="submit">Authenticate</button></div></form><p class="callout">Local first run: execute <code>python scripts/setup_local.py</code>. No default password is enabled.</p></dialog><noscript><div class="notice">JavaScript is required for camera capture and protected operations.</div></noscript></body></html>

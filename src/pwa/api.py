@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.pwa.alerts import drain_outbox, ensure_vapid_keys, send_test_push, settings, valid_push_endpoint
+from src.pwa.alerts import drain_outbox, ensure_vapid_keys, get_active_subscriptions, send_test_push, settings, valid_push_endpoint
 from src.pwa.policy import advance, fresh
 from src.pwa.security import ROOT, check_password, encryption_key, seal, unseal
 from src.pwa.store import Store
@@ -636,7 +636,7 @@ def verify_audit_event(event_id: str, user=Depends(operator)):
 def control(user=Depends(admin)):
     store = Store()
     cfg = ensure_vapid_keys(store)
-    active_subs = [v for _, v, _ in store.records("push:") if v.get("active")]
+    active_subs = get_active_subscriptions(store)
     return {
         "storage": "Supabase" if store.cloud else "SQLite local",
         "configured": {k: bool(v) for k, v in cfg.items()},
@@ -706,8 +706,9 @@ def subscribe(body: Subscription, user=Depends(operator)):
                 "device_label": body.device_label or "Web Device",
                 "enabled": True,
             }, headers={"Prefer": "resolution=merge-duplicates"})
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+            logging.getLogger("vault.api").warning("Failed to record push subscription in Supabase: %s", exc)
     return {"subscribed": True}
 
 
@@ -721,8 +722,9 @@ def unsubscribe(body: Subscription, user=Depends(operator)):
     if store.cloud:
         try:
             store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{body.endpoint}", json={"enabled": False})
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+            logging.getLogger("vault.api").warning("Failed to disable push subscription in Supabase: %s", exc)
     return {"subscribed": False}
 
 
@@ -730,7 +732,7 @@ def unsubscribe(body: Subscription, user=Depends(operator)):
 def push_status(user=Depends(operator)):
     store = Store()
     cfg = ensure_vapid_keys(store)
-    active = [v for _, v, _ in store.records("push:") if v.get("active")]
+    active = get_active_subscriptions(store)
     return {
         "configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
         "subscriptions": len(active),

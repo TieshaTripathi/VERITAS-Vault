@@ -19,7 +19,11 @@ export function toast(message) {
    Firebase frontend -> Render FastAPI backend
    ========================================================= */
 
-export const API_BASE = "https://veritas-vault-backend.onrender.com";
+export const API_BASE =
+  typeof window !== "undefined" &&
+  (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
+    ? ""
+    : "https://veritas-vault-backend.onrender.com";
 
 export function evidenceUrl(eventId, preview = false) {
   return `${API_BASE}/api/logs/${encodeURIComponent(eventId)}/evidence${preview ? "/preview" : ""}`;

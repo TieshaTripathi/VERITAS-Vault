@@ -79,3 +79,4 @@ test-results/
 playwright-report/
 data/pwa-*.png
 data/pwa-*.json
+supabase/.temp/

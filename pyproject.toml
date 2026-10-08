@@ -21,3 +21,7 @@ dev = ["pytest==9.0.2", "streamlit>=1.60.0,<2.0"]
 
 [tool.vercel]
 entrypoint = "app:app"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "--basetemp=.pytest_temp"

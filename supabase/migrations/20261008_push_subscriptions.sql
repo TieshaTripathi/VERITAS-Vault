@@ -14,6 +14,13 @@ create table if not exists public.push_subscriptions (
   enabled boolean not null default true
 );
 
+-- Ensure all columns exist even if an older push_subscriptions table was present
+alter table public.push_subscriptions add column if not exists user_id text;
+alter table public.push_subscriptions add column if not exists user_agent text;
+alter table public.push_subscriptions add column if not exists device_label text;
+alter table public.push_subscriptions add column if not exists updated_at timestamptz not null default now();
+alter table public.push_subscriptions add column if not exists enabled boolean not null default true;
+
 create index if not exists idx_push_subs_user on public.push_subscriptions(user_id);
 create index if not exists idx_push_subs_enabled on public.push_subscriptions(enabled);
 

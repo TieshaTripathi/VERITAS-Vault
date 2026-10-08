@@ -67,6 +67,54 @@ def valid_push_endpoint(endpoint):
         or (url.hostname or "").endswith(".notify.windows.com"))
 
 
+import hashlib
+import logging
+
+logger = logging.getLogger("vault.alerts")
+
+
+def get_active_subscriptions(store):
+    """Retrieve active subscriptions from Supabase push_subscriptions table and local records."""
+    subs = {}
+    if getattr(store, "cloud", None):
+        try:
+            cloud_rows = store.cloud.rows("push_subscriptions", enabled="eq.true")
+            for row in cloud_rows:
+                ep = row["endpoint"]
+                k = "push:" + hashlib.sha256(ep.encode()).hexdigest()
+                subs[k] = {
+                    "subscription": {
+                        "endpoint": ep,
+                        "keys": {
+                            "p256dh": row["p256dh"],
+                            "auth": row["auth"],
+                        },
+                    },
+                    "owner": row.get("user_id", "operator"),
+                    "device_label": row.get("device_label", "Web Device"),
+                    "active": True,
+                }
+        except Exception as exc:
+            logger.warning("Failed to fetch push subscriptions from Supabase: %s", exc)
+
+    # Merge / fallback with records("push:") from store
+    for k, v, _ in store.records("push:"):
+        if v.get("active") and k not in subs:
+            subs[k] = v
+    return list(subs.items())
+
+
+def disable_subscription(store, sub_key, sub):
+    """Clean up a dead (404/410) push subscription from both local store and Supabase."""
+    store.put(sub_key, dict(sub, active=False))
+    if getattr(store, "cloud", None):
+        try:
+            ep = sub["subscription"]["endpoint"]
+            store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{ep}", json={"enabled": False})
+        except Exception as exc:
+            logger.warning("Failed to disable subscription in Supabase: %s", exc)
+
+
 def deliver(key, job, version):
     store = Store()
     if job.get("done") or job.get("next_at", 0) > time.time() or job.get("lease_until", 0) > time.time():
@@ -78,7 +126,7 @@ def deliver(key, job, version):
     delivered = set(job.get("delivered", []))
     errors = []
     whatsapp_ready = bool(config["CALLMEBOT_API_KEY"] and config["CALLMEBOT_PHONE"])
-    subscriptions = [(k, v) for k, v, _ in store.records("push:") if v.get("active")]
+    subscriptions = get_active_subscriptions(store)
     push_ready = bool(config["VAPID_PRIVATE_KEY"] and config["VAPID_PUBLIC_KEY"] and config["VAPID_SUBJECT"] and subscriptions)
     deadline = time.monotonic() + 30
     if whatsapp_ready and "whatsapp" not in delivered:
@@ -94,13 +142,14 @@ def deliver(key, job, version):
             errors.append("whatsapp")
     if push_ready:
         from pywebpush import webpush, WebPushException
+        event_id = job.get("id", "")
         push_payload = json.dumps({
             "title": "VERITAS SECURITY ALERT",
             "body": f"{job.get('reason') or 'Unregistered identity detected at CP-MAIN-01.'} Access remains locked.",
-            "event_id": job.get("id", ""),
+            "event_id": event_id,
             "reason_code": job.get("reason_code", "ZT-001"),
-            "url": "/logs",
-            "tag": job.get("id", "vault-security-alert"),
+            "url": f"/audit?event={event_id}" if event_id else "/audit",
+            "tag": event_id or "vault-security-alert",
         })
         for sub_key, sub in subscriptions:
             if sub_key in delivered:
@@ -115,13 +164,7 @@ def deliver(key, job, version):
                 delivered.add(sub_key)
             except WebPushException as exc:
                 if exc.response is not None and exc.response.status_code in (404, 410):
-                    store.put(sub_key, dict(sub, active=False))
-                    if store.cloud:
-                        try:
-                            ep = sub["subscription"]["endpoint"]
-                            store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{ep}", json={"enabled": False})
-                        except Exception:
-                            pass
+                    disable_subscription(store, sub_key, sub)
                 else:
                     errors.append("push")
             except Exception:
@@ -137,7 +180,7 @@ def deliver(key, job, version):
 def send_test_push(store=None):
     store = store or Store()
     config = ensure_vapid_keys(store)
-    subscriptions = [(k, v) for k, v, _ in store.records("push:") if v.get("active")]
+    subscriptions = get_active_subscriptions(store)
     if not (config.get("VAPID_PRIVATE_KEY") and config.get("VAPID_PUBLIC_KEY")):
         return {"sent": 0, "error": "VAPID keys not configured"}
     from pywebpush import webpush, WebPushException
@@ -146,7 +189,7 @@ def send_test_push(store=None):
     payload = json.dumps({
         "title": "VERITAS TEST ALERT",
         "body": "Push channel operational.",
-        "url": "/logs",
+        "url": "/audit",
         "tag": now_tag,
         "event_id": now_tag,
     })
@@ -162,13 +205,7 @@ def send_test_push(store=None):
             sent += 1
         except WebPushException as exc:
             if exc.response is not None and exc.response.status_code in (404, 410):
-                store.put(sub_key, dict(sub, active=False))
-                if store.cloud:
-                    try:
-                        ep = sub["subscription"]["endpoint"]
-                        store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{ep}", json={"enabled": False})
-                    except Exception:
-                        pass
+                disable_subscription(store, sub_key, sub)
         except Exception:
             pass
     return {"sent": sent, "total": len(subscriptions)}

@@ -25,6 +25,8 @@ import {
   clearActiveAlert,
   subscribePush,
   getPushSubscription,
+  testSiren,
+  testPush,
 } from "./alerts.js";
 
 let stopCamera = null;
@@ -390,16 +392,33 @@ function updateAlertCenterUI() {
   const breachBox = $("#alert-center-breach");
   const alarmIndicator = $("#alarm-state-indicator");
   const ackBtn = $("#btn-ack-alert");
+  const camStatusEl = $("#camera-status");
+  const modal = $("#breach-modal");
+
+  // Camera telemetry status
+  if (camStatusEl) {
+    if (stopCamera) {
+      camStatusEl.textContent = "ACTIVE";
+      camStatusEl.style.color = "var(--green)";
+    } else if (cameraStarting) {
+      camStatusEl.textContent = "INITIALIZING";
+      camStatusEl.style.color = "var(--cyan)";
+    } else {
+      camStatusEl.textContent = "STANDBY";
+      camStatusEl.style.color = "#91a5bc";
+    }
+  }
 
   if (alert && state !== "GRANTED" && state !== "STANDBY") {
+    const evidenceUrlStr = `/audit?event=${encodeURIComponent(alert.id || "")}`;
     if (alertCard) {
       alertCard.hidden = false;
       $("#alert-code").textContent = `${alert.title} · ${alert.code}`;
       $("#alert-time").textContent = alert.timestamp;
-      $("#alert-message").textContent = `${alert.reason.toUpperCase()} · EVIDENCE CAPTURED · ACCESS LOCKED`;
+      $("#alert-message").textContent = `${(alert.reason || "").toUpperCase()} · EVIDENCE CAPTURED · ACCESS LOCKED`;
       if (ackBtn) {
         ackBtn.classList.toggle("acknowledged", alert.acknowledged);
-        ackBtn.textContent = alert.acknowledged ? "ACKNOWLEDGED ✓" : "ACKNOWLEDGE";
+        ackBtn.textContent = alert.acknowledged ? "ACKNOWLEDGED ✓" : "ACKNOWLEDGE ALERT";
       }
     }
     if (standbyBox) standbyBox.hidden = true;
@@ -411,10 +430,33 @@ function updateAlertCenterUI() {
         $("#ac-breach-alarm").textContent = isAlarmActive() ? "SOUNDING" : alert.acknowledged ? "ACKNOWLEDGED" : "SILENT";
       }
       if ($("#ac-breach-push")) $("#ac-breach-push").textContent = "SENT";
+      if ($("#ac-breach-evidence")) $("#ac-breach-evidence").textContent = "CAPTURED";
+      const acViewEv = $("#btn-ac-view-evidence");
+      if (acViewEv) acViewEv.href = evidenceUrlStr;
     }
     if (alertBadge) {
       alertBadge.textContent = "BREACH";
       alertBadge.className = "badge BREACH";
+    }
+
+    // Populate and display In-App Breach Modal
+    if (modal) {
+      const bmSubtitle = $("#bm-subtitle");
+      if (bmSubtitle) bmSubtitle.textContent = alert.subtitle || "UNAUTHORIZED PERSON DETECTED";
+      const bmCheckpoint = $("#bm-checkpoint");
+      if (bmCheckpoint) bmCheckpoint.textContent = alert.checkpoint || "CP-MAIN-01";
+      const bmTime = $("#bm-time");
+      if (bmTime) bmTime.textContent = alert.timestamp || "—";
+      const bmEv = $("#bm-evidence");
+      if (bmEv) bmEv.textContent = alert.evidence || "CAPTURED";
+      const bmView = $("#bm-btn-view");
+      if (bmView) bmView.href = evidenceUrlStr;
+
+      if (!alert.acknowledged && !modal.open && typeof modal.showModal === "function") {
+        try {
+          modal.showModal();
+        } catch {}
+      }
     }
   } else {
     if (alertCard) alertCard.hidden = true;
@@ -427,6 +469,9 @@ function updateAlertCenterUI() {
     if (alarmIndicator) {
       alarmIndicator.textContent = "SILENT";
       alarmIndicator.style.color = "#91a5bc";
+    }
+    if (modal && modal.open) {
+      try { modal.close(); } catch {}
     }
   }
 
@@ -654,6 +699,36 @@ $("#btn-ack-alert")?.addEventListener("click", () => {
   updateAlertCenterUI();
 });
 
+$("#bm-btn-ack")?.addEventListener("click", () => {
+  acknowledgeAlert();
+  updateAlertCenterUI();
+});
+
+$("#bm-btn-view")?.addEventListener("click", () => {
+  acknowledgeAlert();
+  updateAlertCenterUI();
+});
+
+$("#btn-test-siren")?.addEventListener("click", () => {
+  initAudio();
+  testSiren();
+  toast("Alarm siren test active (2s).");
+  updateAlertCenterUI();
+});
+
+$("#btn-test-push")?.addEventListener("click", async () => {
+  const btn = $("#btn-test-push");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await testPush();
+    toast(`Test phone alert dispatched to ${res.sent || 0} active subscriber(s).`);
+  } catch (err) {
+    toast(err.message || "Push test dispatch failed.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
 $("#toggle-mute")?.addEventListener("click", () => {
   setMuted(!isMuted());
   updateMuteButton();
@@ -688,7 +763,19 @@ document.addEventListener("vault-critical-alert", () => {
   updateAlertCenterUI();
 });
 
+document.addEventListener("vault-alert-acknowledged", () => {
+  const modal = $("#breach-modal");
+  if (modal && modal.open) {
+    try { modal.close(); } catch {}
+  }
+  updateAlertCenterUI();
+});
+
 document.addEventListener("vault-alert-cleared", () => {
+  const modal = $("#breach-modal");
+  if (modal && modal.open) {
+    try { modal.close(); } catch {}
+  }
   updateAlertCenterUI();
 });
 
