@@ -38,12 +38,8 @@
     <div class="ac-actions"><button type="button" id="btn-test-siren" class="ac-btn quiet">TEST SIREN 🔊</button><button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button></div>
   </div>
   <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Telegram Photo Alert</span><strong id="telegram-status-indicator" class="field-val">NOT CONFIGURED</strong></div>
-    <div class="ac-actions"><button type="button" id="btn-test-telegram" class="ac-btn quiet">TEST TELEGRAM ✈️</button><button type="button" id="btn-config-telegram" class="ac-btn">CONFIGURE BOT ⚙️</button></div>
-  </div>
-  <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Phone Push</span><strong id="phone-push-indicator" class="field-val">NOT CONFIGURED</strong></div>
-    <div class="ac-actions"><button type="button" id="btn-test-push" class="ac-btn quiet">TEST PUSH 📱</button><button type="button" id="btn-enable-phone" class="ac-btn">ENABLE PHONE ALERTS</button></div>
+    <div class="alert-field"><span class="field-label">Telegram Alerts</span><strong id="telegram-status-indicator" class="field-val">NOT CONFIGURED</strong></div>
+    <div class="ac-actions"><button type="button" id="btn-test-telegram" class="ac-btn quiet">TEST TELEGRAM ✈️</button></div>
   </div>
 </div>
 <div class="alert-center-box breach-box" id="alert-center-breach" hidden>
@@ -54,7 +50,6 @@
   <div class="alert-center-row">
     <div class="alert-field"><span class="field-label">Alarm</span><strong id="ac-breach-alarm" class="field-val alarm-sounding">SOUNDING</strong></div>
     <div class="alert-field"><span class="field-label">Telegram Photo</span><strong id="ac-breach-telegram" class="field-val telegram-tag">DISPATCHED</strong></div>
-    <div class="alert-field"><span class="field-label">Phone Push</span><strong id="ac-breach-push" class="field-val">SENT</strong></div>
     <div class="alert-field"><span class="field-label">Evidence</span><strong id="ac-breach-evidence" class="field-val evidence-tag">CAPTURED</strong></div>
   </div>
   <div class="alert-center-actions">
@@ -62,17 +57,6 @@
     <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
   </div>
 </div></section>
-<dialog id="telegram-dialog" class="auth-dialog" aria-labelledby="tg-title">
-  <button class="close" data-close aria-label="Close dialog">&times;</button>
-  <p class="eyebrow">TELEGRAM ALERT INTEGRATION</p>
-  <h2 id="tg-title">Configure Telegram Bot</h2>
-  <p>Free instant intrusion photo alerts via Telegram Bot API.</p>
-  <form id="telegram-config-form">
-    <label>Telegram Bot Token<input id="tg-token" placeholder="e.g. 123456789:ABCdefGHIjkl... from @BotFather" autocomplete="off"></label>
-    <label>Telegram Chat ID<input id="tg-chat-id" placeholder="Your user ID or group ID" autocomplete="off"></label>
-    <div class="form-actions"><button class="primary" type="submit">Save Telegram Settings</button></div>
-  </form>
-</dialog>
 <dialog id="breach-modal" class="breach-modal" role="alertdialog" aria-modal="true" aria-labelledby="bm-title">
   <div class="bm-card">
     <div class="bm-header">

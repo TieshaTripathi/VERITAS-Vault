@@ -20,7 +20,17 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.pwa.alerts import drain_outbox, ensure_vapid_keys, get_active_subscriptions, send_test_push, send_test_telegram, settings, valid_push_endpoint
+from src.pwa.alerts import (
+    drain_outbox,
+    ensure_vapid_keys,
+    get_active_subscriptions,
+    get_telegram_config,
+    get_telegram_diagnostic_status,
+    send_test_push,
+    send_test_telegram,
+    settings,
+    valid_push_endpoint,
+)
 from src.pwa.policy import advance, fresh
 from src.pwa.security import ROOT, check_password, encryption_key, seal, unseal
 from src.pwa.store import Store
@@ -653,14 +663,12 @@ def verify_audit_event(event_id: str, user=Depends(operator)):
 @app.get("/api/control")
 def control(user=Depends(admin)):
     store = Store()
-    cfg = ensure_vapid_keys(store)
     active_subs = get_active_subscriptions(store)
+    tg_cfg = get_telegram_config()
     return {
         "storage": "Supabase" if store.cloud else "SQLite local",
-        "configured": {k: bool(v) for k, v in cfg.items()},
         "facenet": bool(os.environ.get("FACENET_MODEL_PATH")),
-        "push_configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
-        "telegram_configured": bool(cfg.get("TELEGRAM_BOT_TOKEN") and cfg.get("TELEGRAM_CHAT_ID")),
+        "telegram_configured": tg_cfg["configured"],
         "subscriptions_count": len(active_subs),
         "audit_verified": True,
         "outbox": [v for _, v, _ in store.records("job:")][-30:],
@@ -670,25 +678,32 @@ def control(user=Depends(admin)):
 @app.get("/api/alerts/status")
 def alerts_status(user=Depends(operator)):
     store = Store()
-    cfg = settings(store)
     active_subs = get_active_subscriptions(store)
+    tg_cfg = get_telegram_config()
     return {
-        "telegram_configured": bool(cfg.get("TELEGRAM_BOT_TOKEN") and cfg.get("TELEGRAM_CHAT_ID")),
-        "push_configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
+        "telegram_configured": tg_cfg["configured"],
+        "push_configured": bool(ensure_vapid_keys(store).get("VAPID_PUBLIC_KEY")),
         "subscriptions_count": len(active_subs),
     }
 
 
+@app.get("/api/alerts/telegram/status")
+def telegram_status(user=Depends(admin)):
+    """Backend Telegram diagnostic endpoint (admin only).
+    Returns safe configuration and reachability status without exposing secrets.
+    """
+    return get_telegram_diagnostic_status()
+
+
 @app.post("/api/alerts/telegram/test")
-def telegram_test(user=Depends(operator)):
+def telegram_test(user=Depends(admin)):
+    """Authenticated admin test endpoint executing text-first, then photo Telegram test."""
     return send_test_telegram()
 
 
 class AlertSettings(BaseModel):
     CALLMEBOT_PHONE: str = Field(default="", max_length=25, pattern=r"^\+?[0-9]*$")
     CALLMEBOT_API_KEY: str = Field(default="", max_length=256)
-    TELEGRAM_BOT_TOKEN: str = Field(default="", max_length=256)
-    TELEGRAM_CHAT_ID: str = Field(default="", max_length=64)
     VAPID_PUBLIC_KEY: str = Field(default="", max_length=256)
     VAPID_PRIVATE_KEY: str = Field(default="", max_length=512)
     VAPID_SUBJECT: str = Field(default="", max_length=254, pattern=r"^(mailto:[^\s@]+@[^\s@]+|)$")
@@ -699,6 +714,8 @@ def save_settings(body: AlertSettings, user=Depends(admin)):
     store = Store()
     config = settings(store)
     config.update({key: value for key, value in body.model_dump().items() if value})
+    config.pop("TELEGRAM_BOT_TOKEN", None)
+    config.pop("TELEGRAM_CHAT_ID", None)
     store.put("config:alerts", {"encrypted": base64.b64encode(seal(json.dumps(config).encode(), "settings")).decode()})
     return {"saved": True}
 

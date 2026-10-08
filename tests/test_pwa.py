@@ -205,72 +205,343 @@ def test_provider_failure_is_retained_for_retry(client,monkeypatch):
     assert saved['status']=='RETRY' and saved['attempts']==1 and saved['next_at']>time.time()
 
 
-def test_telegram_photo_alert_delivery(client, monkeypatch):
+def test_telegram_getme_validation(client, monkeypatch):
     from src.pwa import alerts
-    from src.pwa.security import seal
     signin(client)
-    res = client.post('/api/control/settings', json={
-        'TELEGRAM_BOT_TOKEN': '123456:TEST_TOKEN',
-        'TELEGRAM_CHAT_ID': '987654321'
-    })
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:VALID_BOT_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    class MockGetMeResponse:
+        status_code = 200
+        content = b'{"ok": true}'
+        def json(self): return {"ok": True, "result": {"is_bot": True, "username": "veritas_bot"}}
+
+    class MockGetChatResponse:
+        status_code = 200
+        content = b'{"ok": true}'
+        def json(self): return {"ok": True, "result": {"id": 987654321, "type": "private"}}
+
+    def mock_get(url, *args, **kwargs):
+        if "getMe" in url:
+            return MockGetMeResponse()
+        if "getChat" in url:
+            return MockGetChatResponse()
+        return MockGetMeResponse()
+
+    monkeypatch.setattr(alerts.httpx, "get", mock_get)
+    res = client.get("/api/alerts/telegram/status")
     assert res.status_code == 200
+    data = res.json()
+    assert data["configured"] is True
+    assert data["bot_reachable"] is True
+    assert data["chat_reachable"] is True
+    assert data["description"] == "CONNECTED"
 
-    # Verify status reflects configuration
-    status = client.get('/api/alerts/status').json()
-    assert status['telegram_configured'] is True
 
-    # Test Telegram test endpoint with mocked httpx.post
+def test_telegram_invalid_token(client, monkeypatch):
+    from src.pwa import alerts
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "INVALID_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    class MockUnauthorizedResponse:
+        status_code = 401
+        content = b'{"ok": false, "description": "Unauthorized"}'
+        def json(self): return {"ok": False, "error_code": 401, "description": "Unauthorized"}
+
+    monkeypatch.setattr(alerts.httpx, "get", lambda url, *args, **kwargs: MockUnauthorizedResponse())
+    res = client.get("/api/alerts/telegram/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["configured"] is True
+    assert data["bot_reachable"] is False
+    assert data["chat_reachable"] is False
+    assert data["description"] == "Unauthorized"
+
+
+def test_telegram_invalid_chat_id(client, monkeypatch):
+    from src.pwa import alerts
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:VALID_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "INVALID_CHAT_ID")
+
+    class MockGetMeResponse:
+        status_code = 200
+        content = b'{"ok": true}'
+        def json(self): return {"ok": True, "result": {"is_bot": True}}
+
+    class MockBadChatResponse:
+        status_code = 400
+        content = b'{"ok": false, "description": "Bad Request: chat not found"}'
+        def json(self): return {"ok": False, "error_code": 400, "description": "Bad Request: chat not found"}
+
+    def mock_get(url, *args, **kwargs):
+        if "getMe" in url:
+            return MockGetMeResponse()
+        if "getChat" in url:
+            return MockBadChatResponse()
+        return MockGetMeResponse()
+
+    monkeypatch.setattr(alerts.httpx, "get", mock_get)
+    res = client.get("/api/alerts/telegram/status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["configured"] is True
+    assert data["bot_reachable"] is True
+    assert data["chat_reachable"] is False
+    assert data["description"] == "Bad Request: chat not found"
+
+
+def test_telegram_text_test_succeeds(client, monkeypatch):
+    from src.pwa import alerts
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
     sent_requests = []
-    class MockResponse:
-        def raise_for_status(self): pass
-        def json(self): return {'ok': True, 'result': {'message_id': 101}}
+    class MockPostResponse:
+        status_code = 200
+        content = b'{"ok": true}'
+        def json(self): return {"ok": True, "result": {"message_id": 42}}
 
     def mock_post(url, *args, **kwargs):
         sent_requests.append((url, kwargs))
-        return MockResponse()
+        return MockPostResponse()
 
-    monkeypatch.setattr(alerts.httpx, 'post', mock_post)
-    test_res = client.post('/api/alerts/telegram/test').json()
-    assert test_res['ok'] is True
-    assert len(sent_requests) >= 1
-    assert 'sendPhoto' in sent_requests[0][0]
+    monkeypatch.setattr(alerts.httpx, "post", mock_post)
+    res = client.post("/api/alerts/telegram/test").json()
+    assert res["ok"] is True
+    assert res["text_sent"] is True
+    assert res["photo_sent"] is True
+    assert len(sent_requests) == 2
 
-    # Test real breach job delivery with encrypted evidence frame
-    fake_frame = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' + b'fake_jpeg_content'
+    # Verify plain text sent first
+    text_url, text_kwargs = sent_requests[0]
+    assert "sendMessage" in text_url
+    assert text_kwargs["json"]["chat_id"] == "987654321"
+    assert "🚨 VERITAS TEST ALERT" in text_kwargs["json"]["text"]
+    assert "Telegram connection successful." in text_kwargs["json"]["text"]
+    assert "Checkpoint: CP-MAIN-01" in text_kwargs["json"]["text"]
+
+
+def test_telegram_photo_test_succeeds(client, monkeypatch):
+    from src.pwa import alerts
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    sent_requests = []
+    class MockPostResponse:
+        status_code = 200
+        content = b'{"ok": true}'
+        def json(self): return {"ok": True, "result": {"message_id": 43}}
+
+    monkeypatch.setattr(alerts.httpx, "post", lambda url, *a, **k: (sent_requests.append((url, k)), MockPostResponse())[1])
+    res = client.post("/api/alerts/telegram/test").json()
+    assert res["ok"] is True
+    assert res["photo_sent"] is True
+
+    # Verify photo sent second
+    photo_url, photo_kwargs = sent_requests[1]
+    assert "sendPhoto" in photo_url
+    assert photo_kwargs["data"]["chat_id"] == "987654321"
+    assert "photo" in photo_kwargs["files"]
+    photo_filename, photo_bytes, content_type = photo_kwargs["files"]["photo"]
+    assert content_type == "image/jpeg"
+    assert len(photo_bytes) > 0
+
+
+def test_telegram_text_succeeds_but_photo_fails(client, monkeypatch):
+    from src.pwa import alerts
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    class MockTextOkResponse:
+        status_code = 200
+        content = b'{"ok": true}'
+        def json(self): return {"ok": True, "result": {"message_id": 44}}
+
+    class MockPhotoFailResponse:
+        status_code = 400
+        content = b'{"ok": false, "description": "Bad Request: wrong file identifier/HTTP URL specified"}'
+        def json(self): return {"ok": False, "description": "Bad Request: wrong file identifier/HTTP URL specified"}
+
+    def mock_post(url, *args, **kwargs):
+        if "sendMessage" in url:
+            return MockTextOkResponse()
+        return MockPhotoFailResponse()
+
+    monkeypatch.setattr(alerts.httpx, "post", mock_post)
+    res = client.post("/api/alerts/telegram/test").json()
+    assert res["ok"] is False
+    assert res["text_sent"] is True
+    assert res["photo_sent"] is False
+    assert "Telegram API rejected photo" in res["error"]
+    assert "wrong file identifier" in res["error"]
+
+
+def test_telegram_failure_does_not_break_breach(client, monkeypatch):
+    from src.pwa import alerts
+    from src.pwa.security import seal
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    def mock_post_fail(url, *args, **kwargs):
+        raise httpx.ConnectError("Network unreachable")
+
+    monkeypatch.setattr(alerts.httpx, "post", mock_post_fail)
+
+    fake_frame = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' + b'fake_jpeg'
     ev_digest = hashlib.sha256(fake_frame).hexdigest()
-    ev_path = 'evidence/test-telegram-breach.enc'
-    Store().save_blob(ev_path, seal(fake_frame, 'evidence:' + ev_digest))
+    ev_path = "evidence/breach-fail-test.enc"
+    Store().save_blob(ev_path, seal(fake_frame, "evidence:" + ev_digest))
 
     job = {
-        'id': 'evt-tg-001',
-        'checkpoint': 'CP-MAIN-01',
-        'reason_code': 'ZT-001',
-        'reason': 'Unregistered identity detected at CP-MAIN-01',
-        'evidence_path': ev_path,
-        'evidence_hash': ev_digest,
-        'created_at': '2026-10-08T12:00:00Z',
-        'done': False,
-        'attempts': 0,
-        'status': 'PENDING'
+        "id": "evt-breach-tg-fail",
+        "checkpoint": "CP-MAIN-01",
+        "reason_code": "ZT-001",
+        "reason": "Unregistered identity detected at CP-MAIN-01",
+        "evidence_path": ev_path,
+        "evidence_hash": ev_digest,
+        "created_at": "2026-10-08T12:00:00Z",
+        "done": False,
+        "attempts": 0,
+        "status": "PENDING"
     }
-    Store().put('job:evt-tg-001', job)
-    sent_requests.clear()
+    Store().put("job:evt-breach-tg-fail", job)
 
-    alerts.deliver('job:evt-tg-001', job, 0)
-    saved, _ = Store().get('job:evt-tg-001')
-    assert saved['done'] is True
-    assert saved['status'] == 'ACCEPTED_BY_PROVIDER'
-    assert 'telegram' in saved['delivered']
+    alerts.deliver("job:evt-breach-tg-fail", job, 0)
+
+    saved, _ = Store().get("job:evt-breach-tg-fail")
+    assert saved is not None
+    assert saved["status"] == "TELEGRAM_RETRYING"
+    assert saved["attempts"] == 1
+    assert not saved["done"]
+
+
+def test_unknown_face_creates_telegram_alert_job(client, monkeypatch):
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    from src.pwa import api as pwa_api
+    fake_frame = np.full((120, 120, 3), 128, dtype=np.uint8)
+    def mock_decode(img_b64):
+        return fake_frame, b'fake_raw_bytes'
+
+    def mock_recognize(frame, personnel):
+        return [{
+            "id": "unknown",
+            "name": "Unknown",
+            "role": "Unknown",
+            "is_recognized": False,
+            "is_live": True,
+            "bbox": [10, 10, 80, 80]
+        }], {"texture_ok": True, "face_count": 1}
+
+    monkeypatch.setattr(pwa_api, "decode", mock_decode)
+    monkeypatch.setattr(pwa_api, "recognize", mock_recognize)
+
+    res = client.post("/api/checkpoint/frame", json={"image": "data:image/jpeg;base64,AAAA"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["state"] == "BREACH"
+    assert data["reason_code"] == "ZT-001"
+
+    jobs = [v for _, v, _ in Store().records("job:")]
+    assert len(jobs) > 0
+    latest_job = jobs[-1]
+    assert latest_job["reason_code"] == "ZT-001"
+    assert latest_job["evidence_path"] is not None
+    assert latest_job["evidence_hash"] is not None
+
+
+def test_telegram_receives_captured_evidence_bytes(client, monkeypatch):
+    from src.pwa import alerts
+    from src.pwa.security import seal
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    fake_frame = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' + b'captured_evidence_pixels'
+    ev_digest = hashlib.sha256(fake_frame).hexdigest()
+    ev_path = "evidence/test-telegram-evidence.enc"
+    Store().save_blob(ev_path, seal(fake_frame, "evidence:" + ev_digest))
+
+    job = {
+        "id": "evt-tg-evidence-test",
+        "checkpoint": "CP-MAIN-01",
+        "reason_code": "ZT-001",
+        "reason": "Unregistered identity detected at CP-MAIN-01",
+        "evidence_path": ev_path,
+        "evidence_hash": ev_digest,
+        "created_at": "2026-10-08T14:30:00Z",
+        "done": False,
+        "attempts": 0,
+        "status": "PENDING"
+    }
+    Store().put("job:evt-tg-evidence-test", job)
+
+    sent_requests = []
+    class MockPostResponse:
+        status_code = 200
+        content = b'{"ok": true}'
+        def json(self): return {"ok": True, "result": {"message_id": 99}}
+
+    monkeypatch.setattr(alerts.httpx, "post", lambda url, *a, **k: (sent_requests.append((url, k)), MockPostResponse())[1])
+
+    alerts.deliver("job:evt-tg-evidence-test", job, 0)
+    saved, _ = Store().get("job:evt-tg-evidence-test")
+    assert saved["done"] is True
+    assert saved["status"] == "TELEGRAM_SENT"
+    assert "telegram" in saved["delivered"]
+
     assert len(sent_requests) == 1
     url, kwargs = sent_requests[0]
-    assert 'sendPhoto' in url
-    assert kwargs['data']['chat_id'] == '987654321'
-    assert 'VERITAS BREACH ALERT' in kwargs['data']['caption']
-    assert 'CP-MAIN-01' in kwargs['data']['caption']
-    assert 'ACCESS DENIED (ZT-001)' in kwargs['data']['caption']
-    assert 'evt-tg-001' in kwargs['data']['caption']
-    # Photo file bytes matched unsealed evidence
-    assert kwargs['files']['photo'][1] == fake_frame
+    assert "sendPhoto" in url
+    assert kwargs["data"]["chat_id"] == "987654321"
+
+    # Verify exact caption format
+    caption = kwargs["data"]["caption"]
+    assert "🚨 VERITAS BREACH ALERT" in caption
+    assert "Checkpoint: CP-MAIN-01" in caption
+    assert "Access: DENIED" in caption
+    assert "Reason: Unregistered identity detected at CP-MAIN-01" in caption
+    assert "Time: 2026-10-08T14:30:00Z" in caption
+    assert "Evidence ID: evt-tg-evidence-test" in caption
+
+    # Verify exact decrypted bytes sent in photo file
+    assert kwargs["files"]["photo"][1] == fake_frame
+
+
+def test_no_telegram_alert_for_granted_waiting_standby(client, monkeypatch):
+    from src.pwa import alerts
+    signin(client)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    sent_requests = []
+    monkeypatch.setattr(alerts.httpx, "post", lambda url, *a, **k: (sent_requests.append(url), None)[1])
+
+    # 1. STANDBY job or event
+    job_standby = {"id": "job-standby", "verdict": "STANDBY", "reason_code": "STANDBY", "done": False, "attempts": 0}
+    Store().put("job:job-standby", job_standby)
+    alerts.deliver("job:job-standby", job_standby, 0)
+    assert len(sent_requests) == 0
+
+    # 2. WAITING state
+    job_waiting = {"id": "job-waiting", "verdict": "WAITING", "reason_code": "ZT-007", "done": False, "attempts": 0}
+    Store().put("job:job-waiting", job_waiting)
+    alerts.deliver("job:job-waiting", job_waiting, 0)
+    assert len(sent_requests) == 0
+
+    # 3. GRANTED state
+    job_granted = {"id": "job-granted", "verdict": "GRANTED", "reason_code": "GRANTED", "done": False, "attempts": 0}
+    Store().put("job:job-granted", job_granted)
+    alerts.deliver("job:job-granted", job_granted, 0)
+    assert len(sent_requests) == 0
 
 
 def test_manifest_icons_and_cache_privacy(client):

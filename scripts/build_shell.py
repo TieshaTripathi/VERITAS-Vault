@@ -62,12 +62,8 @@ CHECKPOINT = f'''
     <div class="ac-actions"><button type="button" id="btn-test-siren" class="ac-btn quiet">TEST SIREN 🔊</button><button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button></div>
   </div>
   <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Telegram Photo Alert</span><strong id="telegram-status-indicator" class="field-val">NOT CONFIGURED</strong></div>
-    <div class="ac-actions"><button type="button" id="btn-test-telegram" class="ac-btn quiet">TEST TELEGRAM ✈️</button><button type="button" id="btn-config-telegram" class="ac-btn">CONFIGURE BOT ⚙️</button></div>
-  </div>
-  <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Phone Push</span><strong id="phone-push-indicator" class="field-val">NOT CONFIGURED</strong></div>
-    <div class="ac-actions"><button type="button" id="btn-test-push" class="ac-btn quiet">TEST PUSH 📱</button><button type="button" id="btn-enable-phone" class="ac-btn">ENABLE PHONE ALERTS</button></div>
+    <div class="alert-field"><span class="field-label">Telegram Alerts</span><strong id="telegram-status-indicator" class="field-val">NOT CONFIGURED</strong></div>
+    <div class="ac-actions"><button type="button" id="btn-test-telegram" class="ac-btn quiet">TEST TELEGRAM ✈️</button></div>
   </div>
 </div>
 <div class="alert-center-box breach-box" id="alert-center-breach" hidden>
@@ -78,7 +74,6 @@ CHECKPOINT = f'''
   <div class="alert-center-row">
     <div class="alert-field"><span class="field-label">Alarm</span><strong id="ac-breach-alarm" class="field-val alarm-sounding">SOUNDING</strong></div>
     <div class="alert-field"><span class="field-label">Telegram Photo</span><strong id="ac-breach-telegram" class="field-val telegram-tag">DISPATCHED</strong></div>
-    <div class="alert-field"><span class="field-label">Phone Push</span><strong id="ac-breach-push" class="field-val">SENT</strong></div>
     <div class="alert-field"><span class="field-label">Evidence</span><strong id="ac-breach-evidence" class="field-val evidence-tag">CAPTURED</strong></div>
   </div>
   <div class="alert-center-actions">
@@ -86,17 +81,6 @@ CHECKPOINT = f'''
     <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
   </div>
 </div></section>
-<dialog id="telegram-dialog" class="auth-dialog" aria-labelledby="tg-title">
-  <button class="close" data-close aria-label="Close dialog">&times;</button>
-  <p class="eyebrow">TELEGRAM ALERT INTEGRATION</p>
-  <h2 id="tg-title">Configure Telegram Bot</h2>
-  <p>Free instant intrusion photo alerts via Telegram Bot API.</p>
-  <form id="telegram-config-form">
-    <label>Telegram Bot Token<input id="tg-token" placeholder="e.g. 123456789:ABCdefGHIjkl... from @BotFather" autocomplete="off"></label>
-    <label>Telegram Chat ID<input id="tg-chat-id" placeholder="Your user ID or group ID" autocomplete="off"></label>
-    <div class="form-actions"><button class="primary" type="submit">Save Telegram Settings</button></div>
-  </form>
-</dialog>
 <dialog id="breach-modal" class="breach-modal" role="alertdialog" aria-modal="true" aria-labelledby="bm-title">
   <div class="bm-card">
     <div class="bm-header">
@@ -167,26 +151,23 @@ LOGS = '''<section class="panel"><div class="panel-head"><h2 class="section-labe
 
 CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">THREAT SIMULATION LAB</h2><span class="badge">ISOLATED PREVIEW</span></div><p>Exercise the visual states without touching the live checkpoint or sending alerts.</p>
 <div class="sim-grid"><button data-simulate="spoof"><b>◈ Presentation spoof</b><small>Simulate a printed / replayed face</small></button><button data-simulate="intruder"><b>⌖ Unregistered intruder</b><small>Simulate an unknown identity</small></button><button data-simulate="timeout"><b>◷ Single-custody timeout</b><small>Run the complete 5.0s window</small></button><button data-simulate="granted"><b>✓ Valid dual custody</b><small>Preview the granted state</small></button></div>
-<div class="sim-result" id="sim-result" role="status">Select a scenario to begin.</div>{dial('sim-timer')}<p class="callout">All results in this panel are synthetic. No biometric decisions, evidence records, push notifications, or WhatsApp messages are created.</p></section>
-<section class="panel"><div class="panel-head"><h2 class="section-label">DEVICE & NOTIFICATIONS</h2><span class="badge">PWA</span></div><p>Install the app, then register this device for generic security alerts. Biometric details never appear on the lock screen.</p><div class="camera-controls"><button class="primary" id="enable-push">ENABLE PHONE ALERTS</button><button id="disable-push">Disable on this device</button><button data-install>Install app ↗</button></div>
-<div class="camera-controls" style="margin-top: 12px; gap: 8px;">
-  <button type="button" id="btn-test-siren" class="button" style="flex:1;">TEST SIREN 🔊</button>
-  <button type="button" id="btn-test-phone-push" class="primary" style="flex:1;">TEST PHONE ALERT 📱</button>
-</div>
-<p class="callout">On iPhone, use Share → Add to Home Screen, then enable alerts from the installed app. Delivery depends on browser/OS permissions and configured VAPID keys.</p></section></div>
-<div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">INTEGRATION STATUS</h2><span class="badge">ADMIN ONLY</span></div><div class="config-grid">
-  <div class="config-status">Backend<span id="backend-status">ONLINE</span></div>
-  <div class="config-status">Supabase<span id="storage-status">SIGN IN</span></div>
+<div class="sim-result" id="sim-result" role="status">Select a scenario to begin.</div>{dial('sim-timer')}<p class="callout">All results in this panel are synthetic. No biometric decisions, evidence records, or alerts are created.</p></section>
+<section class="panel"><div class="panel-head"><h2 class="section-label">SYSTEM HEALTH & READINESS</h2><span class="badge">ZERO TRUST</span></div><div class="config-grid">
+  <div class="config-status">Storage<span id="storage-status">CONNECTED</span></div>
+  <div class="config-status">Audit<span id="audit-status">VERIFIED</span></div>
+  <div class="config-status">Local Siren<span id="audio-status">READY</span></div>
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
-  <div class="config-status">Biometric scanner<span id="facenet-status">READY</span></div>
-  <div class="config-status">Alarm audio<span id="audio-status">READY</span></div>
-  <div class="config-status">Telegram Bot<span id="telegram-status">NOT CHECKED</span></div>
-  <div class="config-status">Phone Push<span id="push-status">NOT CHECKED</span></div>
-  <div class="config-status">This device<span id="device-sub-status">NOT CHECKED</span></div>
-  <div class="config-status">Active push subscriptions<span id="subs-count">0</span></div>
-  <div class="config-status">Audit chain<span id="audit-status">VERIFIED</span></div>
-</div><p class="callout">Supabase URL and server key are deployment-managed environment variables. Change them in Render and redeploy; the browser never receives privileged keys.</p></section>
-<section class="panel"><div class="panel-head"><h2 class="section-label">ALERT CREDENTIAL MANAGER</h2></div><form id="settings-form"><label>Telegram Bot token<input name="TELEGRAM_BOT_TOKEN" type="password" placeholder="From @BotFather (e.g. 123456:ABC...)" autocomplete="off"></label><label>Telegram Chat ID<input name="TELEGRAM_CHAT_ID" placeholder="Your user ID or channel ID" autocomplete="off"></label><label>VAPID public key<input name="VAPID_PUBLIC_KEY" placeholder="Base64url public key" autocomplete="off"></label><label>VAPID private key<input name="VAPID_PRIVATE_KEY" type="password" placeholder="Never shared with the browser" autocomplete="new-password"></label><label>VAPID contact subject<input name="VAPID_SUBJECT" placeholder="mailto:security@example.com" autocomplete="off"></label><div class="form-actions"><button id="save-settings" class="primary" type="submit">Save encrypted settings</button><button type="button" id="btn-test-tg-control" class="ac-btn quiet">TEST TELEGRAM ✈️</button></div></form></section></div></div>'''
+</div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section></div>
+<div class="stack"><section class="panel" id="telegram-panel"><div class="panel-head"><h2 class="section-label">TELEGRAM ALERTS</h2><span class="badge" id="control-telegram-badge">NOT CONFIGURED</span></div>
+<div class="config-grid" style="margin-bottom:16px;">
+  <div class="config-status">Telegram Alerts<strong id="control-telegram-status" style="font-size:14px;">NOT CONFIGURED</strong></div>
+  <div class="config-status">Bot API<span id="control-bot-api">DISCONNECTED</span></div>
+  <div class="config-status">Last Telegram<span id="control-last-telegram">NEVER</span></div>
+</div>
+<div id="control-tg-notice" class="callout" style="display:none;margin-bottom:16px;">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Render environment variables.</div>
+<div id="control-tg-error" class="alert-desc" style="display:none;color:#ef4444;font-size:12px;margin-bottom:14px;padding:8px 12px;background:rgba(239,68,68,0.1);border-left:3px solid #ef4444;border-radius:4px;"></div>
+<div class="form-actions"><button type="button" id="btn-test-tg-control" class="primary" style="width:100%;">TEST TELEGRAM ✈️</button></div>
+<p class="callout" style="margin-top:14px;">Credentials are managed exclusively via Render environment variables (<code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_CHAT_ID</code>). Secrets are never accepted from or exposed to the browser.</p></section></div></div>'''
 
 
 TITLES = {"checkpoint": ("SECURITY OPERATIONS / VAULT 01", "Live checkpoint", "Verify identities. Enforce dual custody. Seal every evidence trail."),

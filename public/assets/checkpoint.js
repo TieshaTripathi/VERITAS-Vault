@@ -739,46 +739,15 @@ $("#btn-test-telegram")?.addEventListener("click", async () => {
   try {
     const res = await testTelegram();
     if (res.ok) {
-      toast(`Telegram test alert dispatched to chat ${res.recipient || ""}`);
+      toast("Telegram test alert dispatched successfully (text + photo).");
     } else {
-      toast(res.error || "Telegram alert failed. Configure token and chat ID.");
+      toast(res.error || "Telegram alert failed. Configure Render environment variables.");
     }
   } catch (err) {
     toast(err.message || "Telegram test failed.");
   } finally {
     if (btn) btn.disabled = false;
     updateAlertCenterUI();
-  }
-});
-
-$("#btn-config-telegram")?.addEventListener("click", () => {
-  const modal = $("#telegram-dialog");
-  if (modal && typeof modal.showModal === "function") {
-    modal.showModal();
-  }
-});
-
-$("#telegram-config-form")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const token = $("#tg-token")?.value.trim();
-  const chatId = $("#tg-chat-id")?.value.trim();
-  if (!token || !chatId) {
-    toast("Please enter both Telegram Bot Token and Chat ID.");
-    return;
-  }
-  try {
-    await post("/control/settings", {
-      TELEGRAM_BOT_TOKEN: token,
-      TELEGRAM_CHAT_ID: chatId,
-    });
-    toast("Telegram settings saved securely.");
-    const modal = $("#telegram-dialog");
-    if (modal && typeof modal.close === "function") {
-      modal.close();
-    }
-    updateAlertCenterUI();
-  } catch (err) {
-    toast(err.message || "Failed to save Telegram settings.");
   }
 });
 

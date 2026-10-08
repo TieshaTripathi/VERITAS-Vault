@@ -11,11 +11,7 @@ import {
 import {
   initAudio,
   testSiren,
-  testPush,
   testTelegram,
-  subscribePush,
-  unsubscribePush,
-  getPushSubscription,
 } from "./alerts.js";
 
 let simulationTimer;
@@ -85,65 +81,75 @@ async function load() {
   if (currentUser?.role !== "admin") return;
   try {
     const result = await api("/control");
-    if ($("#backend-status")) $("#backend-status").textContent = "ONLINE";
     if ($("#storage-status")) $("#storage-status").textContent = result.storage === "Supabase" ? "CONNECTED" : result.storage;
     if ($("#camera-status")) $("#camera-status").textContent = await checkCameraStatus();
-    if ($("#facenet-status")) $("#facenet-status").textContent = "READY";
     if ($("#audio-status")) $("#audio-status").textContent = "READY";
-    if ($("#telegram-status")) $("#telegram-status").textContent = result.telegram_configured ? "READY" : "NOT CONFIGURED";
-    if ($("#push-status")) $("#push-status").textContent = result.push_configured ? "CONFIGURED" : "NOT CONFIGURED";
-    if ($("#subs-count")) $("#subs-count").textContent = String(result.subscriptions_count ?? 0);
     if ($("#audit-status")) $("#audit-status").textContent = result.audit_verified ? "VERIFIED" : "UNVERIFIED";
 
-    const localSub = await getPushSubscription();
-    if ($("#device-sub-status")) {
-      $("#device-sub-status").textContent = localSub ? "SUBSCRIBED" : "NOT SUBSCRIBED";
+    // Query Telegram diagnostic status
+    try {
+      const tg = await api("/alerts/telegram/status");
+      const isConfigured = Boolean(tg.configured);
+      const tgStatusEl = $("#control-telegram-status");
+      const tgBadgeEl = $("#control-telegram-badge");
+      const botApiEl = $("#control-bot-api");
+      const lastTgEl = $("#control-last-telegram");
+      const noticeEl = $("#control-tg-notice");
+      const errorEl = $("#control-tg-error");
+
+      if (tgStatusEl) {
+        tgStatusEl.textContent = isConfigured ? "CONFIGURED" : "NOT CONFIGURED";
+        tgStatusEl.style.color = isConfigured ? "var(--green)" : "#ef4444";
+      }
+      if (tgBadgeEl) {
+        tgBadgeEl.textContent = isConfigured ? "CONFIGURED" : "NOT CONFIGURED";
+        tgBadgeEl.className = isConfigured ? "badge" : "badge muted";
+      }
+      if (botApiEl) {
+        if (!isConfigured) {
+          botApiEl.textContent = "DISCONNECTED";
+          botApiEl.style.color = "#91a5bc";
+        } else if (tg.bot_reachable) {
+          botApiEl.textContent = "CONNECTED";
+          botApiEl.style.color = "var(--green)";
+        } else {
+          botApiEl.textContent = "DISCONNECTED";
+          botApiEl.style.color = "#ef4444";
+        }
+      }
+      if (lastTgEl) {
+        const lastSt = tg.last_telegram_status || "NEVER";
+        lastTgEl.textContent = lastSt;
+        lastTgEl.style.color = lastSt === "SENT" ? "var(--green)" : lastSt === "FAILED" ? "#ef4444" : "#91a5bc";
+      }
+      if (noticeEl) {
+        noticeEl.style.display = isConfigured ? "none" : "block";
+      }
+      if (errorEl) {
+        if (isConfigured && tg.description && tg.description !== "CONNECTED") {
+          errorEl.textContent = `Telegram: ${tg.description}`;
+          errorEl.style.display = "block";
+        } else {
+          errorEl.style.display = "none";
+        }
+      }
+    } catch (tgErr) {
+      console.warn("Failed to retrieve Telegram diagnostic status:", tgErr);
     }
   } catch (error) {
     toast(error.message);
   }
 }
 
-$("#settings-form").onsubmit = (event) => {
-  event.preventDefault();
-  action($("#save-settings"), async () => {
-    const data = Object.fromEntries(new FormData(event.target));
-    await post("/control/settings", data);
-    event.target.reset();
-    toast(
-      "Encrypted server settings saved. Secrets are never returned to the browser.",
-    );
-    load();
-  });
-};
-
 $("#btn-test-tg-control")?.addEventListener("click", () =>
   action($("#btn-test-tg-control"), async () => {
-    if (!currentUser) throw new Error("Sign in as admin to test Telegram.");
+    if (!currentUser || currentUser.role !== "admin") throw new Error("Sign in as admin to test Telegram.");
     const res = await testTelegram();
     if (res.ok) {
-      toast(`Telegram test alert sent to chat ${res.recipient || ""}`);
+      toast("Telegram test alert sent successfully (text and photo delivered).");
     } else {
-      toast(res.error || "Telegram alert failed. Configure token and chat ID.");
+      toast(res.error || "Telegram alert failed. Check Render environment variables.");
     }
-    load();
-  }),
-);
-
-$("#enable-push")?.addEventListener("click", () =>
-  action($("#enable-push"), async () => {
-    if (!currentUser) throw new Error("Sign in before registering notifications.");
-    initAudio();
-    await subscribePush();
-    toast("Device registered for security notifications.");
-    load();
-  }),
-);
-
-$("#disable-push")?.addEventListener("click", () =>
-  action($("#disable-push"), async () => {
-    await unsubscribePush();
-    toast("Device notifications disabled.");
     load();
   }),
 );
@@ -156,19 +162,6 @@ $("#btn-test-siren")?.addEventListener("click", () => {
     toast(e.message || "Failed to trigger test siren.");
   }
 });
-
-$("#btn-test-phone-push")?.addEventListener("click", () =>
-  action($("#btn-test-phone-push"), async () => {
-    if (!currentUser) throw new Error("Sign in as admin to test push.");
-    const res = await testPush();
-    if (res.error) {
-      toast("Test push failed: " + res.error);
-    } else {
-      toast(`VERITAS TEST ALERT dispatched to ${res.sent} active subscription(s).`);
-    }
-    load();
-  }),
-);
 
 document.addEventListener("vault-auth", load);
 load();
