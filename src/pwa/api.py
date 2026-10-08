@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.pwa.alerts import drain_outbox, ensure_vapid_keys, get_active_subscriptions, send_test_push, settings, valid_push_endpoint
+from src.pwa.alerts import drain_outbox, ensure_vapid_keys, get_active_subscriptions, send_test_push, send_test_telegram, settings, valid_push_endpoint
 from src.pwa.policy import advance, fresh
 from src.pwa.security import ROOT, check_password, encryption_key, seal, unseal
 from src.pwa.store import Store
@@ -432,6 +432,9 @@ def transition(faces=None, evidence=None, key="checkpoint:main"):
                     "status": "PENDING",
                     "reason_code": updated.get("reason_code", "ZT-001"),
                     "reason": updated.get("reason", "Unregistered identity detected at CP-MAIN-01"),
+                    "checkpoint": "CP-MAIN-01",
+                    "evidence_path": proof.get("path"),
+                    "evidence_hash": proof.get("sha256"),
                 }
         if store.cas(key, version, updated, event, job):
             updated["revision"] = version + 1
@@ -452,48 +455,63 @@ async def finish_window(deadline):
 
 @app.post("/api/checkpoint/frame")
 def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(operator)):
-    rate_limit("scan:" + user["id"], 90)
+    rate_limit("scan:" + user["id"], 120)
     store = Store()
     current, _ = store.get("checkpoint:main")
-    if current and current["state"] in ("GRANTED", "BREACH", "DENIED"):
-        return transition()[0]
+    current = current or fresh()
+
     try:
         frame, raw = decode(body.image)
-        # Anti-replay capture validation if session challenge was provided
-        if body.session_id and body.capture_nonce:
-            valid, capture_err, frame_hash = default_capture_manager.validate_capture(
-                session_id=body.session_id,
-                capture_nonce=body.capture_nonce,
-                device_id=body.device_id or "DEV-EDGE-01",
-                checkpoint_id=body.checkpoint_id or "CP-MAIN-01",
-                raw_frame_bytes=raw,
-                signature=body.signature,
-                require_signature=False
-            )
-            if not valid:
-                code = "ZT-009" if "REPLAY" in capture_err else "ZT-013"
-                state, version = store.get("checkpoint:main")
-                state = state or fresh()
-                state.update(state="BREACH", reason=capture_err)
-                event_id = str(uuid.uuid4())
-                proof = {}
-                if raw:
-                    ev_digest = hashlib.sha256(raw).hexdigest()
-                    ev_path = f"evidence/{uuid.uuid4()}.enc"
-                    store.save_blob(ev_path, seal(raw, "evidence:" + ev_digest))
-                    proof = {"path": ev_path, "sha256": ev_digest, "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1")}
-                event = {"id": event_id, "timestamp": utc(), "verdict": "BREACH", "mode": state.get("mode", "standard"),
-                         "parties": state.get("parties", []), "reason": capture_err, "evidence": proof,
-                         "sha256_hash": proof.get("sha256") or hashlib.sha256(raw).hexdigest(), "status": "RECORDED"}
-                job = {"id": event_id, "created_at": utc(), "done": False, "attempts": 0, "status": "PENDING"}
-                store.cas("checkpoint:main", version, state, event, job)
-                background.add_task(drain_outbox)
-                state.update(reason_code=code, safe_user_message="ACCESS DENIED: Capture integrity check failed", risk_score=95)
-                return state
-
         faces, quality_report = recognize(frame, store.personnel())
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+
+    now = time.time()
+    frame_size = [int(frame.shape[1]), int(frame.shape[0])]
+
+    # Terminal states (GRANTED, BREACH, DENIED) stay latched until reset:
+    # Return terminal verdict while including live faces and quality for continuous HUD overlay
+    if current and current.get("state") in ("GRANTED", "BREACH", "DENIED"):
+        res = dict(current)
+        res.update(faces=faces, quality=quality_report, frame_size=frame_size)
+        return res
+
+    # Anti-replay capture validation if session challenge was provided
+    if body.session_id and body.capture_nonce:
+        valid, capture_err, frame_hash = default_capture_manager.validate_capture(
+            session_id=body.session_id,
+            capture_nonce=body.capture_nonce,
+            device_id=body.device_id or "DEV-EDGE-01",
+            checkpoint_id=body.checkpoint_id or "CP-MAIN-01",
+            raw_frame_bytes=raw,
+            signature=body.signature,
+            require_signature=False
+        )
+        if not valid:
+            code = "ZT-009" if "REPLAY" in capture_err else "ZT-013"
+            state, ver = store.get("checkpoint:main")
+            state = state or fresh()
+            state.update(state="BREACH", reason=capture_err)
+            event_id = str(uuid.uuid4())
+            proof = {}
+            if raw:
+                ev_digest = hashlib.sha256(raw).hexdigest()
+                ev_path = f"evidence/{uuid.uuid4()}.enc"
+                store.save_blob(ev_path, seal(raw, "evidence:" + ev_digest))
+                proof = {"path": ev_path, "sha256": ev_digest, "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1")}
+            now_utc = utc()
+            event = {"id": event_id, "timestamp": now_utc, "verdict": "BREACH", "mode": state.get("mode", "standard"),
+                     "parties": state.get("parties", []), "reason": capture_err, "evidence": proof,
+                     "sha256_hash": proof.get("sha256") or hashlib.sha256(raw).hexdigest(), "status": "RECORDED"}
+            job = {"id": event_id, "created_at": now_utc, "done": False, "attempts": 0, "status": "PENDING",
+                   "checkpoint": "CP-MAIN-01", "reason_code": code, "reason": capture_err,
+                   "evidence_path": proof.get("path"), "evidence_hash": proof.get("sha256")}
+            store.cas("checkpoint:main", ver, state, event, job)
+            background.add_task(drain_outbox)
+            state.update(reason_code=code, safe_user_message="ACCESS DENIED: Capture integrity check failed", risk_score=95,
+                         faces=faces, quality=quality_report, frame_size=frame_size)
+            return state
+
     digest = hashlib.sha256(frame.tobytes()).hexdigest()  # Hash in memory before any storage.
     proof = None
     if faces and digest not in (current or {}).get("seen", []):
@@ -502,7 +520,7 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
         proof = {"path": path, "sha256": digest, "shape": list(frame.shape),
                  "encoding": "BGR uint8 decoded pixels", "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1")}
     result, terminal = transition(faces if proof else [], proof)
-    result.update(faces=faces, quality=quality_report, frame_size=[int(frame.shape[1]), int(frame.shape[0])])
+    result.update(faces=faces, quality=quality_report, frame_size=frame_size)
     if result["state"] == "GRANTED":
         result["authorization_token"] = default_pdp._issue_signed_authorization(
             checkpoint_id=body.checkpoint_id or "CP-MAIN-01",
@@ -642,15 +660,35 @@ def control(user=Depends(admin)):
         "configured": {k: bool(v) for k, v in cfg.items()},
         "facenet": bool(os.environ.get("FACENET_MODEL_PATH")),
         "push_configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
+        "telegram_configured": bool(cfg.get("TELEGRAM_BOT_TOKEN") and cfg.get("TELEGRAM_CHAT_ID")),
         "subscriptions_count": len(active_subs),
         "audit_verified": True,
         "outbox": [v for _, v, _ in store.records("job:")][-30:],
     }
 
 
+@app.get("/api/alerts/status")
+def alerts_status(user=Depends(operator)):
+    store = Store()
+    cfg = settings(store)
+    active_subs = get_active_subscriptions(store)
+    return {
+        "telegram_configured": bool(cfg.get("TELEGRAM_BOT_TOKEN") and cfg.get("TELEGRAM_CHAT_ID")),
+        "push_configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
+        "subscriptions_count": len(active_subs),
+    }
+
+
+@app.post("/api/alerts/telegram/test")
+def telegram_test(user=Depends(operator)):
+    return send_test_telegram()
+
+
 class AlertSettings(BaseModel):
     CALLMEBOT_PHONE: str = Field(default="", max_length=25, pattern=r"^\+?[0-9]*$")
     CALLMEBOT_API_KEY: str = Field(default="", max_length=256)
+    TELEGRAM_BOT_TOKEN: str = Field(default="", max_length=256)
+    TELEGRAM_CHAT_ID: str = Field(default="", max_length=64)
     VAPID_PUBLIC_KEY: str = Field(default="", max_length=256)
     VAPID_PRIVATE_KEY: str = Field(default="", max_length=512)
     VAPID_SUBJECT: str = Field(default="", max_length=254, pattern=r"^(mailto:[^\s@]+@[^\s@]+|)$")

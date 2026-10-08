@@ -62,6 +62,10 @@ CHECKPOINT = f'''
     <div class="ac-actions"><button type="button" id="btn-test-siren" class="ac-btn quiet">TEST SIREN 🔊</button><button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button></div>
   </div>
   <div class="alert-center-row">
+    <div class="alert-field"><span class="field-label">Telegram Photo Alert</span><strong id="telegram-status-indicator" class="field-val">NOT CONFIGURED</strong></div>
+    <div class="ac-actions"><button type="button" id="btn-test-telegram" class="ac-btn quiet">TEST TELEGRAM ✈️</button><button type="button" id="btn-config-telegram" class="ac-btn">CONFIGURE BOT ⚙️</button></div>
+  </div>
+  <div class="alert-center-row">
     <div class="alert-field"><span class="field-label">Phone Push</span><strong id="phone-push-indicator" class="field-val">NOT CONFIGURED</strong></div>
     <div class="ac-actions"><button type="button" id="btn-test-push" class="ac-btn quiet">TEST PUSH 📱</button><button type="button" id="btn-enable-phone" class="ac-btn">ENABLE PHONE ALERTS</button></div>
   </div>
@@ -73,6 +77,7 @@ CHECKPOINT = f'''
   </div>
   <div class="alert-center-row">
     <div class="alert-field"><span class="field-label">Alarm</span><strong id="ac-breach-alarm" class="field-val alarm-sounding">SOUNDING</strong></div>
+    <div class="alert-field"><span class="field-label">Telegram Photo</span><strong id="ac-breach-telegram" class="field-val telegram-tag">DISPATCHED</strong></div>
     <div class="alert-field"><span class="field-label">Phone Push</span><strong id="ac-breach-push" class="field-val">SENT</strong></div>
     <div class="alert-field"><span class="field-label">Evidence</span><strong id="ac-breach-evidence" class="field-val evidence-tag">CAPTURED</strong></div>
   </div>
@@ -81,6 +86,17 @@ CHECKPOINT = f'''
     <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
   </div>
 </div></section>
+<dialog id="telegram-dialog" class="auth-dialog" aria-labelledby="tg-title">
+  <button class="close" data-close aria-label="Close dialog">&times;</button>
+  <p class="eyebrow">TELEGRAM ALERT INTEGRATION</p>
+  <h2 id="tg-title">Configure Telegram Bot</h2>
+  <p>Free instant intrusion photo alerts via Telegram Bot API.</p>
+  <form id="telegram-config-form">
+    <label>Telegram Bot Token<input id="tg-token" placeholder="e.g. 123456789:ABCdefGHIjkl... from @BotFather" autocomplete="off"></label>
+    <label>Telegram Chat ID<input id="tg-chat-id" placeholder="Your user ID or group ID" autocomplete="off"></label>
+    <div class="form-actions"><button class="primary" type="submit">Save Telegram Settings</button></div>
+  </form>
+</dialog>
 <dialog id="breach-modal" class="breach-modal" role="alertdialog" aria-modal="true" aria-labelledby="bm-title">
   <div class="bm-card">
     <div class="bm-header">
@@ -109,7 +125,7 @@ CHECKPOINT = f'''
     </div>
   </div>
 </dialog>
-<section class="panel"><div class="panel-head"><h2>Access protocol</h2><span class="badge">ZERO TRUST</span></div><label for="mode">Required custody combination</label><select id="mode"><option value="standard">Employee + Customer</option><option value="high-value">Two distinct Employees</option></select><div class="form-actions"><button id="reset">Reset / apply protocol</button></div><p class="callout">A terminal verdict stays latched until reset. This console reports a policy decision; it does not directly actuate a door lock.</p></section></div></div>'''
+<section class="panel"><div class="panel-head"><h2>Access protocol</h2><span class="badge">ZERO TRUST</span></div><label for="mode">Required custody combination</label><select id="mode"><option value="standard">Employee + Customer</option><option value="high-value">Two distinct Employees</option></select><div class="form-actions"><button id="reset">Reset / apply protocol</button></div><small class="callout" style="display:block;margin-top:8px;">Zero-Trust policy enforcement · Continuous biometric evaluation</small></section></div></div>'''
 
 ENROLLMENT = f'''
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / IDENTITY CAPTURE</h2><span class="badge">ADMIN ONLY</span></div>{camera(True)}
@@ -164,12 +180,14 @@ CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
   <div class="config-status">Biometric scanner<span id="facenet-status">READY</span></div>
   <div class="config-status">Alarm audio<span id="audio-status">READY</span></div>
+  <div class="config-status">Telegram Bot<span id="telegram-status">NOT CHECKED</span></div>
   <div class="config-status">Phone Push<span id="push-status">NOT CHECKED</span></div>
   <div class="config-status">This device<span id="device-sub-status">NOT CHECKED</span></div>
   <div class="config-status">Active push subscriptions<span id="subs-count">0</span></div>
   <div class="config-status">Audit chain<span id="audit-status">VERIFIED</span></div>
 </div><p class="callout">Supabase URL and server key are deployment-managed environment variables. Change them in Render and redeploy; the browser never receives privileged keys.</p></section>
-<section class="panel"><div class="panel-head"><h2 class="section-label">ALERT CREDENTIAL MANAGER</h2></div><form id="settings-form"><label>CallMeBot phone<input name="CALLMEBOT_PHONE" type="tel" placeholder="+ country code and number" autocomplete="off"></label><label>CallMeBot API key<input name="CALLMEBOT_API_KEY" type="password" placeholder="Leave blank to preserve existing key" autocomplete="new-password"></label><label>VAPID public key<input name="VAPID_PUBLIC_KEY" placeholder="Base64url public key" autocomplete="off"></label><label>VAPID private key<input name="VAPID_PRIVATE_KEY" type="password" placeholder="Never shared with the browser" autocomplete="new-password"></label><label>VAPID contact subject<input name="VAPID_SUBJECT" placeholder="mailto:security@example.com" autocomplete="off"></label><div class="form-actions"><button id="save-settings" class="primary" type="submit">Save encrypted settings</button></div></form></section></div></div>'''
+<section class="panel"><div class="panel-head"><h2 class="section-label">ALERT CREDENTIAL MANAGER</h2></div><form id="settings-form"><label>Telegram Bot token<input name="TELEGRAM_BOT_TOKEN" type="password" placeholder="From @BotFather (e.g. 123456:ABC...)" autocomplete="off"></label><label>Telegram Chat ID<input name="TELEGRAM_CHAT_ID" placeholder="Your user ID or channel ID" autocomplete="off"></label><label>VAPID public key<input name="VAPID_PUBLIC_KEY" placeholder="Base64url public key" autocomplete="off"></label><label>VAPID private key<input name="VAPID_PRIVATE_KEY" type="password" placeholder="Never shared with the browser" autocomplete="new-password"></label><label>VAPID contact subject<input name="VAPID_SUBJECT" placeholder="mailto:security@example.com" autocomplete="off"></label><div class="form-actions"><button id="save-settings" class="primary" type="submit">Save encrypted settings</button><button type="button" id="btn-test-tg-control" class="ac-btn quiet">TEST TELEGRAM ✈️</button></div></form></section></div></div>'''
+
 
 TITLES = {"checkpoint": ("SECURITY OPERATIONS / VAULT 01", "Live checkpoint", "Verify identities. Enforce dual custody. Seal every evidence trail."),
           "enrollment": ("IDENTITY MANAGEMENT / ONBOARDING", "Face enrollment", "A dedicated station for securely registering officers and customers."),

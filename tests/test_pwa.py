@@ -205,6 +205,74 @@ def test_provider_failure_is_retained_for_retry(client,monkeypatch):
     assert saved['status']=='RETRY' and saved['attempts']==1 and saved['next_at']>time.time()
 
 
+def test_telegram_photo_alert_delivery(client, monkeypatch):
+    from src.pwa import alerts
+    from src.pwa.security import seal
+    signin(client)
+    res = client.post('/api/control/settings', json={
+        'TELEGRAM_BOT_TOKEN': '123456:TEST_TOKEN',
+        'TELEGRAM_CHAT_ID': '987654321'
+    })
+    assert res.status_code == 200
+
+    # Verify status reflects configuration
+    status = client.get('/api/alerts/status').json()
+    assert status['telegram_configured'] is True
+
+    # Test Telegram test endpoint with mocked httpx.post
+    sent_requests = []
+    class MockResponse:
+        def raise_for_status(self): pass
+        def json(self): return {'ok': True, 'result': {'message_id': 101}}
+
+    def mock_post(url, *args, **kwargs):
+        sent_requests.append((url, kwargs))
+        return MockResponse()
+
+    monkeypatch.setattr(alerts.httpx, 'post', mock_post)
+    test_res = client.post('/api/alerts/telegram/test').json()
+    assert test_res['ok'] is True
+    assert len(sent_requests) >= 1
+    assert 'sendPhoto' in sent_requests[0][0]
+
+    # Test real breach job delivery with encrypted evidence frame
+    fake_frame = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00' + b'fake_jpeg_content'
+    ev_digest = hashlib.sha256(fake_frame).hexdigest()
+    ev_path = 'evidence/test-telegram-breach.enc'
+    Store().save_blob(ev_path, seal(fake_frame, 'evidence:' + ev_digest))
+
+    job = {
+        'id': 'evt-tg-001',
+        'checkpoint': 'CP-MAIN-01',
+        'reason_code': 'ZT-001',
+        'reason': 'Unregistered identity detected at CP-MAIN-01',
+        'evidence_path': ev_path,
+        'evidence_hash': ev_digest,
+        'created_at': '2026-10-08T12:00:00Z',
+        'done': False,
+        'attempts': 0,
+        'status': 'PENDING'
+    }
+    Store().put('job:evt-tg-001', job)
+    sent_requests.clear()
+
+    alerts.deliver('job:evt-tg-001', job, 0)
+    saved, _ = Store().get('job:evt-tg-001')
+    assert saved['done'] is True
+    assert saved['status'] == 'ACCEPTED_BY_PROVIDER'
+    assert 'telegram' in saved['delivered']
+    assert len(sent_requests) == 1
+    url, kwargs = sent_requests[0]
+    assert 'sendPhoto' in url
+    assert kwargs['data']['chat_id'] == '987654321'
+    assert 'VERITAS BREACH ALERT' in kwargs['data']['caption']
+    assert 'CP-MAIN-01' in kwargs['data']['caption']
+    assert 'ACCESS DENIED (ZT-001)' in kwargs['data']['caption']
+    assert 'evt-tg-001' in kwargs['data']['caption']
+    # Photo file bytes matched unsealed evidence
+    assert kwargs['files']['photo'][1] == fake_frame
+
+
 def test_manifest_icons_and_cache_privacy(client):
     from PIL import Image
     manifest=client.get('/manifest.json').json()

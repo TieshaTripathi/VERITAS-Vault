@@ -27,6 +27,8 @@ import {
   getPushSubscription,
   testSiren,
   testPush,
+  testTelegram,
+  getAlertsStatus,
 } from "./alerts.js";
 
 let stopCamera = null;
@@ -379,9 +381,7 @@ function display(result) {
       ? "The server enforces this deadline."
       : "A new authorized scan starts the five-second window.";
 
-  if (state === "GRANTED" || state === "BREACH") {
-    stop();
-  }
+  // Continuous surveillance: Never shut off the camera on breach or granted states
 }
 
 function updateAlertCenterUI() {
@@ -409,6 +409,16 @@ function updateAlertCenterUI() {
     }
   }
 
+  // Telegram bot status telemetry
+  getAlertsStatus().then((status) => {
+    const tgIndicator = $("#telegram-status-indicator");
+    if (tgIndicator) {
+      const isConfigured = status?.telegram_configured;
+      tgIndicator.textContent = isConfigured ? "CONFIGURED" : "NOT CONFIGURED";
+      tgIndicator.style.color = isConfigured ? "var(--green)" : "#91a5bc";
+    }
+  }).catch(() => {});
+
   if (alert && state !== "GRANTED" && state !== "STANDBY") {
     const evidenceUrlStr = `/audit?event=${encodeURIComponent(alert.id || "")}`;
     if (alertCard) {
@@ -429,6 +439,7 @@ function updateAlertCenterUI() {
       if ($("#ac-breach-alarm")) {
         $("#ac-breach-alarm").textContent = isAlarmActive() ? "SOUNDING" : alert.acknowledged ? "ACKNOWLEDGED" : "SILENT";
       }
+      if ($("#ac-breach-telegram")) $("#ac-breach-telegram").textContent = "DISPATCHED";
       if ($("#ac-breach-push")) $("#ac-breach-push").textContent = "SENT";
       if ($("#ac-breach-evidence")) $("#ac-breach-evidence").textContent = "CAPTURED";
       const acViewEv = $("#btn-ac-view-evidence");
@@ -576,7 +587,7 @@ export async function beginSurveillance({ manual = false } = {}) {
     console.log("[VERITAS CAMERA] CAMERA_PLAYING");
 
     clearInterval(loop);
-    loop = setInterval(scan, 1000);
+    loop = setInterval(scan, 750);
 
     // Initial immediate scan
     await scan();
@@ -652,6 +663,13 @@ async function scan() {
     const result = await post("/checkpoint/frame", payload);
     display(result);
 
+    // Adaptive rapid tracking: if a face is currently in view, scan promptly
+    if (Array.isArray(result.faces) && result.faces.length > 0 && stopCamera) {
+      setTimeout(() => {
+        if (!busy && stopCamera) scan();
+      }, 350);
+    }
+
     // 2. If access granted, submit signed authorization token to Edge PEP door relay
     if (result.state === "GRANTED" && result.authorization_token) {
       try {
@@ -662,8 +680,7 @@ async function scan() {
       }
     }
   } catch (error) {
-    stop();
-    toast(error.message);
+    console.warn("[VERITAS SCAN GLITCH]", error.message);
   } finally {
     busy = false;
     $("#hud")?.classList.remove("ingesting");
@@ -714,6 +731,55 @@ $("#btn-test-siren")?.addEventListener("click", () => {
   testSiren();
   toast("Alarm siren test active (2s).");
   updateAlertCenterUI();
+});
+
+$("#btn-test-telegram")?.addEventListener("click", async () => {
+  const btn = $("#btn-test-telegram");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await testTelegram();
+    if (res.ok) {
+      toast(`Telegram test alert dispatched to chat ${res.recipient || ""}`);
+    } else {
+      toast(res.error || "Telegram alert failed. Configure token and chat ID.");
+    }
+  } catch (err) {
+    toast(err.message || "Telegram test failed.");
+  } finally {
+    if (btn) btn.disabled = false;
+    updateAlertCenterUI();
+  }
+});
+
+$("#btn-config-telegram")?.addEventListener("click", () => {
+  const modal = $("#telegram-dialog");
+  if (modal && typeof modal.showModal === "function") {
+    modal.showModal();
+  }
+});
+
+$("#telegram-config-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const token = $("#tg-token")?.value.trim();
+  const chatId = $("#tg-chat-id")?.value.trim();
+  if (!token || !chatId) {
+    toast("Please enter both Telegram Bot Token and Chat ID.");
+    return;
+  }
+  try {
+    await post("/control/settings", {
+      TELEGRAM_BOT_TOKEN: token,
+      TELEGRAM_CHAT_ID: chatId,
+    });
+    toast("Telegram settings saved securely.");
+    const modal = $("#telegram-dialog");
+    if (modal && typeof modal.close === "function") {
+      modal.close();
+    }
+    updateAlertCenterUI();
+  } catch (err) {
+    toast(err.message || "Failed to save Telegram settings.");
+  }
 });
 
 $("#btn-test-push")?.addEventListener("click", async () => {

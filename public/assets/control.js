@@ -12,6 +12,7 @@ import {
   initAudio,
   testSiren,
   testPush,
+  testTelegram,
   subscribePush,
   unsubscribePush,
   getPushSubscription,
@@ -89,6 +90,7 @@ async function load() {
     if ($("#camera-status")) $("#camera-status").textContent = await checkCameraStatus();
     if ($("#facenet-status")) $("#facenet-status").textContent = "READY";
     if ($("#audio-status")) $("#audio-status").textContent = "READY";
+    if ($("#telegram-status")) $("#telegram-status").textContent = result.telegram_configured ? "READY" : "NOT CONFIGURED";
     if ($("#push-status")) $("#push-status").textContent = result.push_configured ? "CONFIGURED" : "NOT CONFIGURED";
     if ($("#subs-count")) $("#subs-count").textContent = String(result.subscriptions_count ?? 0);
     if ($("#audit-status")) $("#audit-status").textContent = result.audit_verified ? "VERIFIED" : "UNVERIFIED";
@@ -114,6 +116,19 @@ $("#settings-form").onsubmit = (event) => {
     load();
   });
 };
+
+$("#btn-test-tg-control")?.addEventListener("click", () =>
+  action($("#btn-test-tg-control"), async () => {
+    if (!currentUser) throw new Error("Sign in as admin to test Telegram.");
+    const res = await testTelegram();
+    if (res.ok) {
+      toast(`Telegram test alert sent to chat ${res.recipient || ""}`);
+    } else {
+      toast(res.error || "Telegram alert failed. Configure token and chat ID.");
+    }
+    load();
+  }),
+);
 
 $("#enable-push")?.addEventListener("click", () =>
   action($("#enable-push"), async () => {

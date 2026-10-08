@@ -332,6 +332,14 @@ export async function testPush() {
   return await post("/push/test", {});
 }
 
+export async function testTelegram() {
+  return await post("/alerts/telegram/test", {});
+}
+
+export async function getAlertsStatus() {
+  return await api("/alerts/status");
+}
+
 export const CRITICAL_REASON_CODES = ["ZT-001", "ZT-002", "ZT-008", "ZT-009", "ZT-013"];
 
 /**

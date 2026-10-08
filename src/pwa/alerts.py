@@ -16,7 +16,9 @@ def settings(store):
     saved, _ = store.get("config:alerts")
     overrides = json.loads(unseal(base64.b64decode(saved["encrypted"]), "settings")) if saved else {}
     return {key: overrides.get(key, os.environ.get(key, "")) for key in (
-        "CALLMEBOT_PHONE", "CALLMEBOT_API_KEY", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT")}
+        "CALLMEBOT_PHONE", "CALLMEBOT_API_KEY",
+        "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+        "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT")}
 
 
 def ensure_vapid_keys(store):
@@ -169,12 +171,126 @@ def deliver(key, job, version):
                     errors.append("push")
             except Exception:
                 errors.append("push")
-    configured = whatsapp_ready or push_ready
+    telegram_ready = bool(config.get("TELEGRAM_BOT_TOKEN") and config.get("TELEGRAM_CHAT_ID"))
+    if telegram_ready and "telegram" not in delivered:
+        try:
+            photo_bytes = None
+            ev_path = job.get("evidence_path")
+            ev_hash = job.get("evidence_hash")
+            if not (ev_path and ev_hash):
+                saved_ev, _ = store.get(f"event:{job.get('id', '')}")
+                if saved_ev and saved_ev.get("evidence"):
+                    ev_path = saved_ev["evidence"].get("path")
+                    ev_hash = saved_ev["evidence"].get("sha256")
+            if ev_path and ev_hash:
+                try:
+                    enc_blob = store.read_blob(ev_path)
+                    photo_bytes = unseal(enc_blob, "evidence:" + ev_hash)
+                except Exception as dec_err:
+                    logger.warning("Could not decrypt evidence frame for Telegram: %s", dec_err)
+
+            ts = job.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            reason_code = job.get("reason_code", "ZT-001")
+            cp_name = job.get("checkpoint", "CP-MAIN-01")
+            ev_id = job.get("id", "N/A")
+            reason_txt = job.get("reason", "Unauthorized person detected at vault checkpoint")
+
+            caption = (
+                "🚨 <b>VERITAS BREACH ALERT</b>\n\n"
+                f"🏢 <b>Checkpoint:</b> {cp_name}\n"
+                f"⏱ <b>Timestamp:</b> {ts}\n"
+                f"🔒 <b>Access State:</b> ACCESS DENIED ({reason_code})\n"
+                f"🆔 <b>Evidence ID:</b> {ev_id}\n"
+                f"⚠️ <b>Reason:</b> {reason_txt}"
+            )
+            send_telegram_photo_alert(config, caption, photo_bytes)
+            delivered.add("telegram")
+        except Exception as exc:
+            logger.warning("Telegram alert delivery failed: %s", exc)
+            errors.append("telegram")
+
+    configured = whatsapp_ready or push_ready or telegram_ready
     attempts = job.get("attempts", 0) + 1
     job.update(delivered=sorted(delivered), done=configured and not errors, attempts=attempts,
                lease_until=0, next_at=time.time() + min(3600, 2 ** min(attempts, 10) * 5),
                status="ACCEPTED_BY_PROVIDER" if configured and not errors else "RETRY" if configured else "UNCONFIGURED")
     store.cas(key, version + 1, job)
+
+
+def send_telegram_photo_alert(config: dict, caption: str, photo_bytes: bytes = None, filename: str = "intruder.jpg"):
+    token = config.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = config.get("TELEGRAM_CHAT_ID", "").strip()
+    if not (token and chat_id):
+        raise ValueError("Telegram Bot Token or Chat ID not configured")
+
+    if photo_bytes:
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        files = {"photo": (filename, photo_bytes, "image/jpeg")}
+        data = {
+            "chat_id": chat_id,
+            "caption": caption,
+            "parse_mode": "HTML",
+        }
+        res = httpx.post(url, data=data, files=files, timeout=15)
+        res.raise_for_status()
+        resp_json = res.json()
+        if not resp_json.get("ok"):
+            raise ValueError(f"Telegram API rejected photo: {resp_json.get('description', 'Unknown error')}")
+        return resp_json
+    else:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = {
+            "chat_id": chat_id,
+            "text": caption,
+            "parse_mode": "HTML",
+        }
+        res = httpx.post(url, json=data, timeout=15)
+        res.raise_for_status()
+        resp_json = res.json()
+        if not resp_json.get("ok"):
+            raise ValueError(f"Telegram API rejected message: {resp_json.get('description', 'Unknown error')}")
+        return resp_json
+
+
+def send_test_telegram(store=None):
+    import io
+    store = store or Store()
+    config = settings(store)
+    token = config.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = config.get("TELEGRAM_CHAT_ID", "").strip()
+    if not (token and chat_id):
+        return {"ok": False, "error": "Telegram Bot Token or Chat ID is not configured."}
+
+    caption = (
+        "🚨 <b>VERITAS BREACH ALERT</b> [TEST]\n\n"
+        "🏢 <b>Checkpoint:</b> CP-MAIN-01\n"
+        f"⏱ <b>Timestamp:</b> {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n"
+        "🔒 <b>Access State:</b> SYSTEM OPERATIONAL\n"
+        "🆔 <b>Evidence ID:</b> TEST-EVIDENCE-001\n"
+        "✅ <b>Status:</b> Telegram Bot API is connected and operational."
+    )
+
+    test_photo = None
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (640, 360), color="#0b0f19")
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([(16, 16), (624, 344)], outline="#00f0ff", width=2)
+        draw.text((36, 40), "VERITAS VAULT SECURITY SYSTEM", fill="#00f0ff")
+        draw.text((36, 80), "LIVE TELEGRAM BOT NOTIFICATION TEST", fill="#ffffff")
+        draw.text((36, 120), f"TIMESTAMP: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}", fill="#91a5bc")
+        draw.text((36, 160), "CHECKPOINT: CP-MAIN-01", fill="#10b981")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        test_photo = buf.getvalue()
+    except Exception:
+        pass
+
+    try:
+        send_telegram_photo_alert(config, caption, test_photo, filename="test_alert.jpg")
+        return {"ok": True, "recipient": chat_id, "channel": "TELEGRAM"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def send_test_push(store=None):

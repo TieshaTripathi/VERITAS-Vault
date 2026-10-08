@@ -1531,6 +1531,11 @@ a.button:hover {
   color: #10b981;
 }
 
+.telegram-tag {
+  color: #38bdf8;
+  font-weight: bold;
+}
+
 @keyframes emergency-pulse {
   0%, 100% {
     box-shadow: 0 0 0 2px #ef444480, 0 0 25px rgba(239, 68, 68, 0.35);
