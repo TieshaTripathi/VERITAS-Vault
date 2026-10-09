@@ -119,15 +119,26 @@ CHECKPOINT = f'''
 '''
 
 ENROLLMENT = f'''
-<div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / IDENTITY CAPTURE</h2><span class="badge">ADMIN ONLY</span></div>{camera(True)}
-<div class="camera-controls"><button class="primary" id="start-camera">Start enrollment camera</button><small>ONE FACE · EVEN LIGHTING · LOOK FORWARD</small></div>
+<div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / MULTI-SAMPLE IDENTITY CAPTURE</h2><span class="badge">ADMIN ONLY</span></div>{camera(True)}
+<div class="camera-controls">
+  <button class="primary" id="start-camera">Start enrollment camera</button>
+  <button type="button" id="capture-sample-btn" class="button" style="background:var(--cyan,#00e5ff);color:#0b0f19;font-weight:700;cursor:pointer" disabled>Capture Sample (1/5)</button>
+  <button type="button" id="reset-samples-btn" class="button" style="display:none;cursor:pointer">Reset Samples</button>
+</div>
+<div class="enrollment-guide" id="enrollment-guide" style="margin:10px 0;padding:12px;background:rgba(18,26,45,0.85);border:1px solid rgba(0,229,255,0.25);border-radius:6px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+    <span id="sample-step-label" style="font-weight:700;color:var(--cyan,#00e5ff);font-size:13px;letter-spacing:0.05em;">SAMPLE 1/5 · LOOK STRAIGHT</span>
+    <span id="sample-count-badge" class="badge" style="border-color:rgba(0,229,255,0.4);color:var(--cyan,#00e5ff)">0 / 5 COLLECTED</span>
+  </div>
+  <div id="sample-guidance-text" style="font-size:12px;color:#91a5bc;">Align face in camera reticle with even lighting.</div>
+</div>
 <div class="quality-grid"><div id="quality-lighting" class="quality-item">LIGHTING / WAITING</div><div id="quality-alignment" class="quality-item">ALIGNMENT / WAITING</div><div id="quality-texture" class="quality-item">TEXTURE / WAITING</div><div id="quality-faces" class="quality-item">FACES / —</div></div>
-<p class="callout">Quality checks run on fresh snapshots. Enrollment requires exactly one aligned, well-lit face that meets the texture threshold.</p></section>
+<p class="callout">Multi-sample enrollment captures 5 distinct angles to generate a robust 512-D identity embedding.</p></section>
 <div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / PERSONNEL DETAILS</h2><span class="badge">AES-256</span></div><form id="enroll-form">
 <label>Full name<input id="full-name" required minlength="2" maxlength="80" autocomplete="name" placeholder="e.g. Alex Morgan"></label>
 <label>Personnel ID<input id="personnel-id" required pattern="[A-Za-z0-9_-]{{2,40}}" maxlength="40" placeholder="e.g. EMP-1042" autocomplete="off"></label>
 <label>Access role<select id="role"><option>Employee</option><option>Customer</option></select></label>
-<div class="form-actions"><button class="primary" id="enroll-submit" type="submit" disabled>Capture & enroll identity</button></div></form>
+<div class="form-actions"><button class="primary" id="enroll-submit" type="submit" disabled>Enroll Biometric Identity</button></div></form>
 <p class="callout">Biometric templates and cropped baselines are encrypted before storage. Duplicate personnel IDs are rejected.</p></section>
 <section class="panel"><div class="panel-head"><h2 class="section-label">ENROLLED PERSONNEL</h2></div><div id="personnel-list" class="muted">Sign in as an administrator to view the registry.</div></section>
 <section class="panel danger-zone-panel" id="danger-zone-panel" hidden><div class="panel-head"><h2 class="section-label" style="color:var(--red,#ef4444)">ADVANCED / DANGER ZONE</h2><span class="badge" style="background:rgba(239,68,68,0.2);color:#ef4444;border-color:rgba(239,68,68,0.4)">ADMIN ONLY</span></div>

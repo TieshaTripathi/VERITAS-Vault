@@ -32,8 +32,8 @@ def advance(state, faces, now, digest=None):
     if digest:
         result["seen"] = (result["seen"] + [digest])[-32:]
 
-    # 2. Multi-Signal PAD Check
-    if any(not f.get("is_live") for f in faces):
+    # 2. Multi-Signal PAD Check (respects temporal consensus checking state)
+    if any((not f.get("is_live") and f.get("liveness") != "CHECKING" and f.get("pad_status") != "CHECKING") for f in faces):
         result.update(
             state="BREACH",
             reason="Presentation spoof rejected",
@@ -44,8 +44,12 @@ def advance(state, faces, now, digest=None):
         )
         return result, True
 
-    # 3. Identity Verification Check
-    if any(not f.get("is_recognized") for f in faces):
+    # 3. Identity Verification Check (temporal consensus)
+    has_unconfirmed_state = any(f.get("recognition_state") in ("VERIFYING", "POSSIBLE_MATCH") for f in faces)
+    if any(
+        (not f.get("is_recognized") and f.get("recognition_state") not in ("VERIFYING", "POSSIBLE_MATCH"))
+        for f in faces
+    ):
         result.update(
             state="BREACH",
             reason="Unregistered identity detected",
@@ -55,6 +59,16 @@ def advance(state, faces, now, digest=None):
             policy_version="VAULT-ZT-v1.0"
         )
         return result, True
+
+    if has_unconfirmed_state:
+        # Face is currently being arbitrated by temporal consensus
+        verifying_msg = (
+            "POSSIBLE MATCH — HOLD STILL"
+            if any(f.get("recognition_state") == "POSSIBLE_MATCH" for f in faces)
+            else "IDENTITY VERIFYING — HOLD STILL"
+        )
+        result["safe_user_message"] = verifying_msg
+        return result, False
 
     # 4. Identity Registration & Custody Window Start
     duplicate_first = False

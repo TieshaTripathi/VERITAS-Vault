@@ -14,7 +14,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Any, Dict, Optional
+from typing import Literal, Any, Dict, Optional, List
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -253,7 +253,9 @@ def issue_session(body: SessionChallengeRequest, user=Depends(operator)):
         raise HTTPException(400, str(exc))
 
 
-class Enrollment(Snapshot):
+class Enrollment(BaseModel):
+    image: Optional[str] = None
+    samples: Optional[List[str]] = None
     name: str = Field(min_length=2, max_length=80)
     personnel_id: str = Field(pattern=r"^[A-Za-z0-9_-]{2,40}$")
     role: Literal["Employee", "Customer"]
@@ -274,27 +276,52 @@ def quality(body: Snapshot, user=Depends(admin)):
 def enroll(body: Enrollment, user=Depends(admin)):
     rate_limit("enroll:" + user["id"], 20)
     try:
-        frame, _ = decode(body.image)
-        faces, report = inspect(frame)
-        if not all(report[k] for k in ("lighting_ok", "aligned", "texture_ok")) or len(faces) != 1:
-            raise HTTPException(422, "One aligned, well-lit, sharp face is required")
+        from src.vision.biometric_service import default_biometric_service
         store = Store()
         person_id = body.personnel_id.upper()
         if any(p["id"] == person_id for p in store.personnel()):
             raise HTTPException(409, "Personnel ID already enrolled")
-        person = {"id": person_id, "name": body.name.strip(), "role": body.role, "created_at": utc(),
-                  "template": template(faces[0], person_id), "baseline": f"baselines/{person_id}-{uuid.uuid4()}.enc"}
+
+        sample_crops = []
+        if body.samples and len(body.samples) >= 5:
+            for s_img in body.samples:
+                frame, _ = decode(s_img)
+                faces, report = inspect(frame)
+                if not faces or len(faces) != 1 or not all(report[k] for k in ("lighting_ok", "aligned", "texture_ok")):
+                    raise HTTPException(422, "Each sample must contain one aligned, well-lit, sharp face")
+                sample_crops.append(faces[0]["crop"])
+            template_blob = default_biometric_service.create_multisample_template(person_id, sample_crops)
+            primary_crop = sample_crops[0]
+        elif body.image:
+            frame, _ = decode(body.image)
+            faces, report = inspect(frame)
+            if not all(report[k] for k in ("lighting_ok", "aligned", "texture_ok")) or len(faces) != 1:
+                raise HTTPException(422, "One aligned, well-lit, sharp face is required")
+            template_blob = template(faces[0], person_id)
+            primary_crop = faces[0]["crop"]
+        else:
+            raise HTTPException(422, "Enrollment image or samples required")
+
+        person = {
+            "id": person_id,
+            "name": body.name.strip(),
+            "role": body.role,
+            "created_at": utc(),
+            "template": template_blob,
+            "baseline": f"baselines/{person_id}-{uuid.uuid4()}.enc"
+        }
         import cv2
-        ok, crop = cv2.imencode(".png", faces[0]["crop"])
+        ok, crop_enc = cv2.imencode(".png", primary_crop)
         if not ok:
             raise ValueError("Unable to encode baseline")
-        encrypted = seal(crop.tobytes(), "baseline:" + person_id)
+        encrypted = seal(crop_enc.tobytes(), "baseline:" + person_id)
         store.save_blob(person["baseline"], encrypted)
         store.enroll(person)
         if not store.cloud:
             baselines = ROOT / "models" / "known_faces"
             baselines.mkdir(parents=True, exist_ok=True)
             (baselines / f"{person_id}.enc").write_bytes(encrypted)
+        default_biometric_service.invalidate_cache()
         return {k: person[k] for k in ("id", "name", "role", "created_at")}
     except (ValueError, sqlite3.IntegrityError) as exc:
         raise HTTPException(422, str(exc))
@@ -436,6 +463,8 @@ def reset_all_personnel(user=Depends(admin)):
     deleted = store.clear_personnel()
     from src.pwa.vision import detector
     detector.cache_clear()
+    from src.vision.biometric_service import default_biometric_service
+    default_biometric_service.invalidate_cache()
     return {"deleted": deleted}
 
 
@@ -757,6 +786,8 @@ def reset(body: Mode, user=Depends(operator)):
     if state and state["state"] == "WAITING":
         raise HTTPException(409, "Wait for the active custody window to finish")
     store.put("incident:active", None)
+    from src.vision.biometric_service import default_biometric_service
+    default_biometric_service.tracker.clear()
     event = {"id": str(uuid.uuid4()), "timestamp": utc(), "verdict": "RESET", "mode": body.mode,
              "parties": [], "reason": "Operator reset: " + user["id"], "evidence": {}, "status": "RECORDED"}
     if not store.cas("checkpoint:main", version, fresh(body.mode), event):

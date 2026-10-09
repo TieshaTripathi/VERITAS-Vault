@@ -151,13 +151,16 @@ function updateTracks(detectedFaces, frameSize) {
       bestTrack.is_recognized = face.is_recognized;
       bestTrack.is_live = face.is_live;
       bestTrack.confidence = face.confidence;
+      bestTrack.recognition_state = face.recognition_state || (face.is_recognized ? "VERIFIED" : "UNKNOWN");
+      bestTrack.candidate_name = face.candidate_name || face.name;
+      bestTrack.liveness = face.liveness || (face.is_live ? "PASS" : "FAIL");
       bestTrack.pad_status = face.pad_status;
       bestTrack.missedFrames = 0;
       bestTrack.lastSeen = now;
       bestTrack.snapW = snapW;
       bestTrack.snapH = snapH;
     } else {
-      const trackId = "TRACK " + String(trackCounter++).padStart(2, "0");
+      const trackId = face.track_id || ("TRACK " + String(trackCounter++).padStart(2, "0"));
       matchedTrackIds.add(trackId);
       tracks.push({
         trackId,
@@ -169,6 +172,9 @@ function updateTracks(detectedFaces, frameSize) {
         is_recognized: face.is_recognized,
         is_live: face.is_live,
         confidence: face.confidence,
+        recognition_state: face.recognition_state || (face.is_recognized ? "VERIFIED" : "UNKNOWN"),
+        candidate_name: face.candidate_name || face.name,
+        liveness: face.liveness || (face.is_live ? "PASS" : "FAIL"),
         pad_status: face.pad_status,
         missedFrames: 0,
         lastSeen: now,
@@ -248,14 +254,23 @@ function renderOverlay() {
     let isWarning = false;
     let isBreach = false;
 
-    if (!track.is_live || !track.is_recognized) {
+    const rState = track.recognition_state || (track.is_recognized ? "VERIFIED" : "UNKNOWN");
+    const isLiveFailed = (!track.is_live && track.liveness === "FAIL");
+
+    if (isLiveFailed) {
       statusColor = "#ef4444";
       isBreach = true;
-    } else if (state === "WAITING") {
+    } else if (rState === "VERIFIED") {
+      statusColor = "#10b981";
+    } else if (rState === "POSSIBLE_MATCH") {
       statusColor = "#f59e0b";
       isWarning = true;
-    } else if (state === "GRANTED") {
-      statusColor = "#10b981";
+    } else if (rState === "UNKNOWN_CONFIRMED" || (!track.is_recognized && state === "BREACH")) {
+      statusColor = "#ef4444";
+      isBreach = true;
+    } else {
+      // VERIFYING
+      statusColor = "#00f0ff";
     }
 
     ctx.save();
@@ -280,16 +295,23 @@ function renderOverlay() {
     let line1 = "";
     let line2 = "";
 
-    if (!track.is_live) {
-      line1 = `SPOOF SUSPECTED · ${track.trackId}`;
+    if (isLiveFailed) {
+      line1 = `SPOOF DETECTED · ${track.trackId}`;
       line2 = `PAD REJECTED · ACCESS BLOCKED`;
-    } else if (!track.is_recognized) {
-      line1 = `UNKNOWN / INTRUDER · ${track.trackId}`;
+    } else if (rState === "VERIFIED") {
+      const matchPct = Math.round((track.confidence || 0.87) * 100);
+      line1 = `${(track.name || "OFFICER").toUpperCase()} · ${(track.role || "EMPLOYEE").toUpperCase()}`;
+      line2 = `VERIFIED · MATCH ${matchPct}% · LIVENESS PASS`;
+    } else if (rState === "POSSIBLE_MATCH") {
+      const matchPct = Math.round((track.confidence || 0.71) * 100);
+      line1 = `POSSIBLE MATCH · ${(track.candidate_name || track.name || "INDIVIDUAL").toUpperCase()}`;
+      line2 = `VERIFYING · MATCH ${matchPct}% · HOLD STILL`;
+    } else if (rState === "UNKNOWN_CONFIRMED" || (!track.is_recognized && state === "BREACH")) {
+      line1 = `UNKNOWN PERSON · ${track.trackId}`;
       line2 = `ACCESS DENIED · CAPTURED`;
     } else {
-      const matchPct = Math.round((track.confidence || 0.88) * 100);
-      line1 = `${(track.name || "AUTHORIZED").toUpperCase()} · ${(track.role || "EMPLOYEE").toUpperCase()}`;
-      line2 = `LIVE · MATCH ${matchPct}% · ${track.trackId}`;
+      line1 = `IDENTITY VERIFYING · ${track.trackId}`;
+      line2 = `HOLD STILL · ANALYZING BIOMETRICS`;
     }
 
     const textWidth = Math.max(ctx.measureText(line1).width, ctx.measureText(line2).width);
