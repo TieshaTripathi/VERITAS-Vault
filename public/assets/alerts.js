@@ -65,6 +65,7 @@ export function clearActiveAlert() {
   stopAlarm();
   currentAlert = null;
   lastNotifiedEventId = null;
+  notifiedEventIds.clear();
   dispatchAlertEvent("vault-alert-cleared", null);
 }
 
@@ -253,18 +254,16 @@ export function evaluateSecurityEvent(result) {
     result.id ||
     (code ? `BREACH-${code}` : "BREACH-GENERIC");
 
-  // Rule: If incoming result has the SAME breach event ID as currentAlert.id:
-  // - do NOT reopen modal
-  // - do NOT restart siren
-  // - do NOT reset acknowledged=false
-  // - only update current telemetry/raw result
-  if (currentAlert && currentAlert.id === eventId) {
-    currentAlert.raw = result;
+  if (notifiedEventIds.has(eventId)) {
+    if (currentAlert && currentAlert.id === eventId) {
+      currentAlert.raw = result;
+    }
     return;
   }
+  notifiedEventIds.add(eventId);
 
-  // Acknowledged alert must NEVER reopen for same event ID
-  if (currentAlert?.acknowledged && currentAlert.id === eventId) {
+  // If incoming result has the SAME breach event ID as currentAlert.id: do not reopen
+  if (currentAlert && currentAlert.id === eventId) {
     currentAlert.raw = result;
     return;
   }

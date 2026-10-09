@@ -221,9 +221,14 @@ def me(user=Depends(operator)):
 
 @app.get("/api/health")
 def health():
-    return {"service": "VERITAS", "version": "3.0.0", "cloud_configured": bool(os.environ.get("SUPABASE_URL")),
-            "auth_configured": bool(os.environ.get("SUPABASE_URL") or os.environ.get("VAULT_OPERATOR_PASSWORD_HASH")),
-            "encryption_configured": bool(os.environ.get("VAULT_ENCRYPTION_KEY"))}
+    return {
+        "service": "VERITAS",
+        "version": "3.0.0",
+        "cloud_configured": bool(os.environ.get("SUPABASE_URL")),
+        "auth_configured": bool(os.environ.get("SUPABASE_URL") or os.environ.get("VAULT_OPERATOR_PASSWORD_HASH")),
+        "encryption_configured": bool(os.environ.get("VAULT_ENCRYPTION_KEY")),
+        "commit": os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "local"
+    }
 
 
 class Snapshot(BaseModel):
@@ -779,12 +784,9 @@ class Mode(BaseModel):
 
 @app.post("/api/checkpoint/reset")
 def reset(body: Mode, user=Depends(operator)):
-    # Reset is itself auditable, and cannot silently discard a pending deadline.
-    transition()
     store = Store()
     state, version = store.get("checkpoint:main")
-    if state and state["state"] == "WAITING":
-        raise HTTPException(409, "Wait for the active custody window to finish")
+    version = version if state else -1
     store.put("incident:active", None)
     from src.vision.biometric_service import default_biometric_service
     default_biometric_service.tracker.clear()

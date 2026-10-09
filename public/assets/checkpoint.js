@@ -209,6 +209,17 @@ function renderOverlay() {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  if (state === "WAITING") {
+    const remaining = Math.max(0, (end - performance.now()) / 1000);
+    ring($("#timer"), "WAITING", remaining, 15);
+    const deadlineNote = $("#deadline-note");
+    if (deadlineNote) {
+      deadlineNote.textContent = `Awaiting second authorized party · ${remaining.toFixed(1)}s remaining`;
+    }
+  } else if (state === "STANDBY") {
+    ring($("#timer"), "STANDBY", 15.0, 15);
+  }
+
   if (!stopCamera || tracks.length === 0) {
     animFrameId = requestAnimationFrame(renderOverlay);
     return;
@@ -384,6 +395,7 @@ function display(result) {
 
   const remaining = Math.max(0, (end - performance.now()) / 1000);
   const remText = remaining.toFixed(1) + "s remaining";
+  ring($("#timer"), state, state === "WAITING" ? remaining : 15.0, 15);
 
   const verdictEl = $("#verdict");
   if (verdictEl) {
@@ -879,6 +891,21 @@ function onAcknowledgeAlert() {
 
 $("#start-camera")?.addEventListener("click", () =>
   action($("#start-camera"), async () => {
+    // 1. Reset any stale previous session to STANDBY
+    shownEventIds.clear();
+    clearActiveAlert();
+    const modal = $("#breach-modal");
+    if (modal && modal.open) {
+      try { modal.close(); } catch {}
+    }
+    try {
+      const modeVal = $("#mode") ? $("#mode").value : "standard";
+      const resetRes = await post("/checkpoint/reset", { mode: modeVal });
+      display(resetRes);
+    } catch (e) {
+      console.warn("Checkpoint reset on camera start:", e.message);
+    }
+    // 2. Start surveillance stream
     await beginSurveillance({ manual: true });
   })
 );

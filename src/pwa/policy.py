@@ -74,6 +74,8 @@ def advance(state, faces, now, digest=None):
     duplicate_first = False
     new_faces = []
     for face in faces:
+        if not face.get("is_recognized"):
+            continue
         if any(p["id"] == face["id"] for p in result["parties"]):
             duplicate_first = True
         else:
