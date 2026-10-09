@@ -34,6 +34,20 @@
         <button type="button" id="btn-test-telegram" class="quiet">Test Telegram ✈️</button>
       </div>
     </div>
+    <div class="diag-group" id="diag-biometrics" style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
+      <span class="diag-label">Biometric Pipeline Debug</span>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));gap:8px;margin-top:8px;">
+        <div class="stat"><span class="stat-label">DETECTOR</span><strong id="diag-detector">OpenCV Haar</strong></div>
+        <div class="stat"><span class="stat-label">EMBEDDING MODEL</span><strong id="diag-model">Standard-512D</strong></div>
+        <div class="stat"><span class="stat-label">TRACK ID</span><strong id="diag-track">—</strong></div>
+        <div class="stat"><span class="stat-label">CANDIDATE</span><strong id="diag-candidate">—</strong></div>
+        <div class="stat"><span class="stat-label">SIMILARITY</span><strong id="diag-similarity">—</strong></div>
+        <div class="stat"><span class="stat-label">RECOGNITION STATE</span><strong id="diag-rec-state">STANDBY</strong></div>
+        <div class="stat"><span class="stat-label">CONSENSUS</span><strong id="diag-consensus">—</strong></div>
+        <div class="stat"><span class="stat-label">PAD STATE</span><strong id="diag-pad">—</strong></div>
+        <div class="stat"><span class="stat-label">TOTAL BIOMETRIC MS</span><strong id="diag-total-ms">—</strong></div>
+      </div>
+    </div>
   </div>
 </details>
 </section>

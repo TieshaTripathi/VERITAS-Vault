@@ -478,6 +478,60 @@ function display(result) {
   }
 
   updateTelemetry();
+  updateBiometricDiagnostics(result);
+}
+
+function updateBiometricDiagnostics(result) {
+  const telem = result?.quality?.telemetry;
+  const face = Array.isArray(result?.faces) && result.faces.length > 0 ? result.faces[0] : null;
+
+  const detEl = $("#diag-detector");
+  if (detEl) detEl.textContent = telem?.detector || "OpenCV Haar (Cascade)";
+
+  const modEl = $("#diag-model");
+  if (modEl) modEl.textContent = telem?.embedding_model || "Standard-Gradient-512D-v2.0";
+
+  const trkEl = $("#diag-track");
+  if (trkEl) trkEl.textContent = face?.track_id || "—";
+
+  const candEl = $("#diag-candidate");
+  if (candEl) {
+    candEl.textContent = face ? `${face.name || "Unknown"} (${face.role || "None"})` : "—";
+  }
+
+  const simEl = $("#diag-similarity");
+  if (simEl) {
+    if (face && typeof face.similarity === "number") {
+      simEl.textContent = `${Math.round(face.similarity * 100)}% (${face.similarity.toFixed(3)})`;
+      simEl.style.color = face.similarity >= 0.75 ? "var(--green)" : face.similarity >= 0.65 ? "var(--amber)" : "var(--red)";
+    } else {
+      simEl.textContent = "—";
+      simEl.style.color = "#91a5bc";
+    }
+  }
+
+  const recStateEl = $("#diag-rec-state");
+  if (recStateEl) {
+    const rState = face?.recognition_state || result?.state || "STANDBY";
+    recStateEl.textContent = rState;
+    recStateEl.style.color = rState === "VERIFIED" ? "var(--green)" : rState === "POSSIBLE_MATCH" ? "var(--amber)" : rState === "UNKNOWN_CONFIRMED" ? "var(--red)" : "var(--cyan)";
+  }
+
+  const consEl = $("#diag-consensus");
+  if (consEl) {
+    consEl.textContent = face?.consensus || (face?.recognition_state === "VERIFIED" ? "3/3 CONFIRMED" : face ? "VERIFYING" : "—");
+  }
+
+  const padEl = $("#diag-pad");
+  if (padEl) {
+    padEl.textContent = face ? `${face.pad_status || "PASS"} (${face.pad_score !== undefined ? face.pad_score.toFixed(2) : "1.00"})` : "—";
+    padEl.style.color = face?.pad_status === "FAIL" ? "var(--red)" : face ? "var(--green)" : "#91a5bc";
+  }
+
+  const latEl = $("#diag-total-ms");
+  if (latEl) {
+    latEl.textContent = telem?.total_biometric_ms ? `${telem.total_biometric_ms} ms` : "—";
+  }
 }
 
 function updateTelemetry() {

@@ -223,6 +223,7 @@ class BiometricService:
                 "pad_confidence": float(face.pad_confidence),
                 "pad_signals": face.pad_signals,
                 "pad_reason_codes": face.pad_reason_codes,
+                "consensus": "3/3 CONFIRMED" if verdict == "VERIFIED" else (f"{track.consecutive_unknown}/3 UNKNOWN" if verdict == "UNKNOWN_CONFIRMED" else f"{len(track.history)}/3 EVAL"),
                 "track_id": track.track_id,
                 "bbox": [int(b) for b in face.bbox],
                 "variance": round(float(face.variance), 1)
@@ -244,6 +245,8 @@ class BiometricService:
             "texture_ok": bool(detected_faces) and all(f["is_live"] for f in faces_output),
             "guidance": quality_eval.guidance,
             "telemetry": {
+                "detector": "OpenCV Haar (Cascade)",
+                "embedding_model": getattr(self.embedding_extractor, "version", "Standard-Gradient-512D-v2.0"),
                 "face_detection_ms": face_detection_ms,
                 "embedding_ms": round(embedding_total_ms, 2),
                 "matching_ms": round(matching_total_ms, 2),
