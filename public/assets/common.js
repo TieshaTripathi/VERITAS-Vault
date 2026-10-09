@@ -498,6 +498,7 @@ export function ring(
   root,
   state,
   remaining,
+  maxWindow = 15,
 ) {
   if (!root) {
     return;
@@ -509,9 +510,9 @@ export function ring(
       : state === "GRANTED"
         ? "#10b981"
         : state === "WAITING"
-          ? remaining > 3
+          ? remaining > (maxWindow * 0.5)
             ? "#10b981"
-            : remaining > 1.5
+            : remaining > (maxWindow * 0.25)
               ? "#f59e0b"
               : "#ef4444"
           : "#00f0ff";
@@ -536,7 +537,7 @@ export function ring(
             : Math.max(
               0,
               remaining,
-            ) / 5
+            ) / maxWindow
         )
       );
   }

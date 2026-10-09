@@ -325,6 +325,8 @@ main {
   letter-spacing: 1px;
   margin-bottom: 22px;
   animation: status-slide-in 0.3s ease;
+  white-space: pre-line;
+  line-height: 1.5;
 }
 .hud {
   position: relative;
@@ -1201,6 +1203,31 @@ dialog dd {
   color: #9ca3af;
 }
 
+.alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reset-btn {
+  background: #0ea5e9;
+  color: #fff;
+  border: 1px solid #0ea5e9;
+  font-weight: 700;
+  padding: 9px 18px;
+  border-radius: 6px;
+  font-size: 12px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.reset-btn:hover {
+  background: #0284c7;
+  border-color: #0284c7;
+}
+
 .alert-center-box {
   display: flex;
   flex-direction: column;
@@ -1295,9 +1322,13 @@ dialog dd {
 
 .alert-center-actions {
   margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.alert-center-actions .ack-btn {
+.alert-center-actions .ack-btn,
+.alert-center-actions .reset-btn {
   width: 100%;
 }
 
@@ -1561,6 +1592,17 @@ a.button:hover {
 .bm-btn-ack:hover {
   background: #dc2626;
   border-color: #dc2626;
+}
+
+.bm-btn-reset {
+  background: #0ea5e9;
+  color: #ffffff;
+  border: 1px solid #0ea5e9;
+}
+
+.bm-btn-reset:hover {
+  background: #0284c7;
+  border-color: #0284c7;
 }
 
 .ac-actions {

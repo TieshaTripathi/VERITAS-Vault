@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from src.pwa.policy import advance, fresh
+from src.pwa.policy import advance, fresh, WINDOW_SECONDS
 from src.pwa.security import password_hash, seal, unseal
 from src.pwa.store import Store
 from src.storage.supabase_client import CloudUnavailable
@@ -79,22 +79,25 @@ def test_auth_csrf_logout_and_admin_boundary(client):
     assert client.get("/api/logs").status_code == 401
 
 
-def test_five_second_deadline_and_duplicate_person():
+def test_fifteen_second_deadline_and_duplicate_person():
     state, terminal = advance(fresh(), [person()], 100, "frame1")
-    assert state["state"] == "WAITING" and state["deadline"] == 105 and not terminal
+    assert state["state"] == "WAITING" and state["deadline"] == 115 and not terminal
     state, _ = advance(state, [person()], 102, "frame2")
-    assert state["deadline"] == 105 and len(state["parties"]) == 1
-    state, terminal = advance(state, [person("B", "Customer")], 105, "frame3")
+    assert state["deadline"] == 115 and len(state["parties"]) == 1
+    state, terminal = advance(state, [person("B", "Customer")], 115, "frame3")
     assert state["state"] == "BREACH" and terminal
-    assert advance(state, [person("B", "Customer")], 106)[0]["state"] == "BREACH"
+    assert state["reason_code"] == "ZT-008"
+    assert "15-second custody window expired" in state["reason"]
+    assert advance(state, [person("B", "Customer")], 116)[0]["state"] == "BREACH"
 
 
 def test_roles_liveness_and_frame_replay():
     state, _ = advance(fresh(), [person()], 100, "same")
     state, _ = advance(state, [person("B","Customer")], 101, "same")
     assert state["state"] == "WAITING"
-    state, terminal = advance(state, [person("B","Customer")], 104.9, "new")
+    state, terminal = advance(state, [person("B","Customer")], 110.0, "new")
     assert state["state"] == "GRANTED" and terminal
+    assert "Distinct identities verified within 15 seconds" in state["reason"]
     high, _ = advance(fresh("high-value"), [person(), person("B","Customer")], 100)
     assert high["state"] == "WAITING"
     spoof = person("C"); spoof["is_live"] = False
@@ -141,9 +144,9 @@ def test_scan_evidence_and_exactly_once_audit(client, monkeypatch):
 
 def test_timeout_persists_once_and_queues_alert(client):
     signin(client)
-    state,_=advance(fresh(),[person()],time.time()-6)
-    Store().put('checkpoint:main',state)
-    assert client.post('/api/checkpoint/tick').json()['state']=='BREACH'
+    state, _ = advance(fresh(), [person()], time.time() - (WINDOW_SECONDS + 1))
+    Store().put('checkpoint:main', state)
+    assert client.post('/api/checkpoint/tick').json()['state'] == 'BREACH'
     assert client.post('/api/checkpoint/tick').json()['state']=='BREACH'
     assert len(Store().logs())==1 and len(Store().records('job:'))==1
 
@@ -1033,6 +1036,84 @@ async def test_automatic_alert_worker_loop_drains_jobs(monkeypatch):
     assert "job-auto-drain-001" in delivered_jobs
     saved, _ = store.get("job:job-auto-drain-001")
     assert saved["done"] is True
+
+
+def test_fifteen_second_dual_custody_full_lifecycle(client):
+    """Complete verification of 15s dual-custody timeout behavior:
+    1. First identity -> WAITING, countdown starts near 15s
+    2. Repeated scanning of SAME identity does not restart or shorten timer
+    3. Second distinct identity at ~10s -> GRANTED (both standard & high-value modes)
+    4. No second identity -> ZT-008 only after 15.0s
+    5. Reset -> STANDBY
+    """
+    from src.pwa.policy import advance, fresh, WINDOW_SECONDS
+
+    # 0. Initial camera standby with no faces does NOT trigger ZT-008
+    s0 = fresh()
+    s_idle, term_idle = advance(s0, [], 100)
+    assert s_idle["state"] == "STANDBY"
+    assert s_idle["deadline"] is None
+    assert not term_idle
+
+    # 1. First valid identity scanned at t=100 -> WAITING, countdown starts near 15 sec
+    emp1 = person(id="EMP-01", role="Employee")
+    s1, term1 = advance(s_idle, [emp1], 100, "f1")
+    assert s1["state"] == "WAITING"
+    assert s1["deadline"] == 100 + WINDOW_SECONDS  # 115.0
+    assert not term1
+    assert len(s1["parties"]) == 1
+
+    # 2. Same identity repeatedly scanned at t=102, 105, 108 -> still 1 party, deadline not restarted/shortened
+    for scan_t in (102, 105, 108):
+        s_repeat, term_repeat = advance(s1, [emp1], scan_t, f"repeat_{scan_t}")
+        assert s_repeat["state"] == "WAITING"
+        assert s_repeat["deadline"] == 115.0  # unchanged
+        assert len(s_repeat["parties"]) == 1
+        assert not term_repeat
+
+    # 3. Second distinct valid identity appears at t=110 (~10 sec after first) -> GRANTED
+    cust1 = person(id="CUST-01", role="Customer")
+    s_granted, term_granted = advance(s1, [cust1], 110, "f_grant")
+    assert s_granted["state"] == "GRANTED"
+    assert term_granted
+    assert "Distinct identities verified within 15 seconds" in s_granted["reason"]
+    assert len(s_granted["parties"]) == 2
+
+    # 3b. High-value mode: Employee + Employee -> GRANTED
+    emp2 = person(id="EMP-02", role="Employee")
+    hv_state = fresh("high-value")
+    hv1, _ = advance(hv_state, [emp1], 100, "hv1")
+    assert hv1["state"] == "WAITING"
+    hv_grant, hv_term = advance(hv1, [emp2], 110, "hv2")
+    assert hv_grant["state"] == "GRANTED"
+    assert hv_term
+
+    # 4. No second identity appears: stays WAITING until 15s, then triggers ZT-008
+    s_timeout_start, _ = advance(fresh(), [emp1], 200, "t_start")
+    assert s_timeout_start["state"] == "WAITING"
+    assert s_timeout_start["deadline"] == 215.0
+
+    # At t=214.9 (14.9s elapsed): still WAITING
+    s_near_timeout, term_near = advance(s_timeout_start, [], 214.9)
+    assert s_near_timeout["state"] == "WAITING"
+    assert not term_near
+
+    # At t=215.0 (15.0s elapsed): ZT-008 triggers
+    s_breached, term_breached = advance(s_timeout_start, [], 215.0)
+    assert s_breached["state"] == "BREACH"
+    assert term_breached
+    assert s_breached["reason_code"] == "ZT-008"
+    assert "15-second custody window expired" in s_breached["reason"]
+
+    # 5. Reset via API -> STANDBY
+    signin(client)
+    res_reset = client.post("/api/checkpoint/reset", json={"mode": "standard"})
+    assert res_reset.status_code == 200
+    reset_data = res_reset.json()
+    assert reset_data["state"] == "STANDBY"
+    assert reset_data["deadline"] is None
+    assert reset_data["parties"] == []
+
 
 
 

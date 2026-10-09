@@ -360,11 +360,13 @@ function display(result) {
     }[state] || "#ef4444",
   );
 
+  const remaining = Math.max(0, (end - performance.now()) / 1000);
+  const remText = remaining.toFixed(1) + "s remaining";
   $("#verdict").textContent =
     state === "GRANTED"
       ? "UNLOCKED · DUAL CUSTODY VERIFIED"
       : state === "WAITING"
-        ? "WAITING FOR SECOND PARTY"
+        ? `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`
         : state + " · " + result.reason;
 
   $("#feed-state").textContent = state;
@@ -418,7 +420,7 @@ function display(result) {
 
   $("#timer-title").textContent =
     state === "WAITING"
-      ? "Verify second party"
+      ? "PRIMARY VERIFIED"
       : state === "GRANTED"
         ? "Policy satisfied"
         : state === "BREACH"
@@ -427,8 +429,8 @@ function display(result) {
 
   $("#deadline-note").textContent =
     state === "WAITING"
-      ? "The server enforces this deadline."
-      : "A new authorized scan starts the five-second window.";
+      ? `Awaiting second authorized party · ${remText}`
+      : "A new authorized scan starts the 15-second window.";
 
   updateAlertCenterUI();
 }
@@ -541,8 +543,12 @@ function updateAlertCenterUI() {
       $("#alert-time").textContent = alert.timestamp;
       $("#alert-message").textContent = `${(alert.reason || "").toUpperCase()} · EVIDENCE CAPTURED · ACCESS LOCKED`;
       if (ackBtn) {
-        ackBtn.classList.toggle("acknowledged", alert.acknowledged);
+        ackBtn.classList.toggle("acknowledged", !!alert.acknowledged);
         ackBtn.textContent = alert.acknowledged ? "ACKNOWLEDGED ✓" : "ACKNOWLEDGE ALERT";
+      }
+      const resetCardBtn = $("#btn-reset-alert");
+      if (resetCardBtn) {
+        resetCardBtn.hidden = !alert.acknowledged;
       }
     }
     if (standbyBox) standbyBox.hidden = true;
@@ -558,6 +564,10 @@ function updateAlertCenterUI() {
       if ($("#ac-breach-evidence")) $("#ac-breach-evidence").textContent = "CAPTURED";
       const acViewEv = $("#btn-ac-view-evidence");
       if (acViewEv) acViewEv.href = evidenceUrlStr;
+      const acResetBtn = $("#btn-ac-reset-checkpoint");
+      if (acResetBtn) {
+        acResetBtn.hidden = !alert.acknowledged;
+      }
     }
     if (alertBadge) {
       alertBadge.textContent = "BREACH";
@@ -576,6 +586,15 @@ function updateAlertCenterUI() {
       if (bmEv) bmEv.textContent = alert.evidence || "CAPTURED";
       const bmView = $("#bm-btn-view");
       if (bmView) bmView.href = evidenceUrlStr;
+      const bmBtnAck = $("#bm-btn-ack");
+      if (bmBtnAck) {
+        bmBtnAck.classList.toggle("acknowledged", !!alert.acknowledged);
+        bmBtnAck.textContent = alert.acknowledged ? "ACKNOWLEDGED (SILENCED) ✓" : "ACKNOWLEDGE ALERT";
+      }
+      const bmBtnReset = $("#bm-btn-reset");
+      if (bmBtnReset) {
+        bmBtnReset.hidden = !alert.acknowledged;
+      }
 
       if (!alert.acknowledged && !modal.open && typeof modal.showModal === "function") {
         try {
@@ -585,8 +604,11 @@ function updateAlertCenterUI() {
     }
   } else {
     if (alertCard) alertCard.hidden = true;
+    if ($("#btn-reset-alert")) $("#btn-reset-alert").hidden = true;
     if (standbyBox) standbyBox.hidden = false;
     if (breachBox) breachBox.hidden = true;
+    if ($("#btn-ac-reset-checkpoint")) $("#btn-ac-reset-checkpoint").hidden = true;
+    if ($("#bm-btn-reset")) $("#bm-btn-reset").hidden = true;
     if (alertBadge) {
       alertBadge.textContent = state === "WAITING" ? "STANDBY / WAITING" : "STANDBY";
       alertBadge.className = "badge";
@@ -848,17 +870,35 @@ $("#start-camera")?.addEventListener("click", () =>
 
 $("#stop-camera")?.addEventListener("click", onStopCamera);
 
+async function resetCheckpoint() {
+  clearActiveAlert();
+  manuallyStopped = false;
+  const modal = $("#breach-modal");
+  if (modal && modal.open) {
+    try { modal.close(); } catch {}
+  }
+  const res = await post("/checkpoint/reset", { mode: $("#mode").value });
+  display(res);
+  toast("Checkpoint reset to STANDBY");
+  if (currentUser) {
+    await beginSurveillance();
+  }
+}
+
 $("#reset")?.addEventListener("click", () =>
-  action($("#reset"), async () => {
-    clearActiveAlert();
-    manuallyStopped = false;
-    const res = await post("/checkpoint/reset", { mode: $("#mode").value });
-    display(res);
-    toast("Checkpoint reset to STANDBY");
-    if (currentUser) {
-      await beginSurveillance();
-    }
-  })
+  action($("#reset"), resetCheckpoint)
+);
+
+$("#btn-reset-alert")?.addEventListener("click", () =>
+  action($("#btn-reset-alert"), resetCheckpoint)
+);
+
+$("#btn-ac-reset-checkpoint")?.addEventListener("click", () =>
+  action($("#btn-ac-reset-checkpoint"), resetCheckpoint)
+);
+
+$("#bm-btn-reset")?.addEventListener("click", () =>
+  action($("#bm-btn-reset"), resetCheckpoint)
 );
 
 $("#btn-ack-alert")?.addEventListener("click", () => {
@@ -1017,19 +1057,39 @@ if (_livenessEl && (!_livenessEl.textContent || _livenessEl.textContent === "—
   _livenessEl.textContent = "NO FACE";
 }
 
-setInterval(
-  () =>
-    ring(
-      $("#timer"),
-      state,
-      state === "WAITING"
-        ? Math.max(0, (end - performance.now()) / 1000)
-        : state === "STANDBY"
-          ? 5
-          : 0,
-    ),
-  50,
-);
+setInterval(() => {
+  const remaining = state === "WAITING"
+    ? Math.max(0, (end - performance.now()) / 1000)
+    : state === "STANDBY"
+      ? 15
+      : 0;
+
+  ring(
+    $("#timer"),
+    state,
+    remaining,
+    15,
+  );
+
+  if (state === "WAITING") {
+    const remText = remaining.toFixed(1) + "s remaining";
+    const verdictEl = $("#verdict");
+    if (verdictEl) {
+      verdictEl.textContent = `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`;
+    }
+    const noteEl = $("#deadline-note");
+    if (noteEl) {
+      noteEl.textContent = `Awaiting second authorized party · ${remText}`;
+    }
+    const timerTitleEl = $("#timer-title");
+    if (timerTitleEl) {
+      timerTitleEl.textContent = "PRIMARY VERIFIED";
+    }
+    if (remaining <= 0 && !busy) {
+      poll();
+    }
+  }
+}, 50);
 
 addEventListener("pagehide", stop);
 addEventListener("offline", () => {

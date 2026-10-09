@@ -39,7 +39,7 @@ document.querySelectorAll("[data-simulate]").forEach(
             : "#ef4444",
       );
       $("#sim-timer").hidden = false;
-      const end = performance.now() + 5000;
+      const end = performance.now() + 15000;
       const update = () => {
         const remaining = Math.max(0, (end - performance.now()) / 1000);
         ring(
@@ -52,6 +52,7 @@ document.querySelectorAll("[data-simulate]").forEach(
               ? "GRANTED"
               : "BREACH",
           kind === "timeout" ? remaining : 0,
+          15,
         );
         if (kind === "timeout" && remaining <= 0) {
           clearInterval(simulationTimer);

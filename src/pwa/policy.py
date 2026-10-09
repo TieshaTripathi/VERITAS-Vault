@@ -1,7 +1,7 @@
-"""Pure five-second custody state machine; persistence performs a CAS commit."""
+"""Pure dual-custody state machine; persistence performs a CAS commit."""
 import copy
 
-WINDOW_SECONDS = 5.0
+WINDOW_SECONDS = 15.0
 
 
 def fresh(mode="standard"):
@@ -19,7 +19,7 @@ def advance(state, faces, now, digest=None):
     if result["deadline"] is not None and now >= result["deadline"]:
         result.update(
             state="BREACH",
-            reason="Five-second custody window expired",
+            reason=f"{int(WINDOW_SECONDS)}-second custody window expired",
             reason_code="ZT-008",
             safe_user_message="SECURITY ALERT: Custody window expired",
             risk_score=85,
@@ -77,7 +77,7 @@ def advance(state, faces, now, digest=None):
     if valid:
         result.update(
             state="GRANTED",
-            reason="Distinct identities verified within five seconds",
+            reason=f"Distinct identities verified within {int(WINDOW_SECONDS)} seconds",
             safe_user_message="ACCESS GRANTED: Proceed to vault entry"
         )
         return result, True

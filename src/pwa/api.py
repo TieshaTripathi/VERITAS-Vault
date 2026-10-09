@@ -34,7 +34,7 @@ from src.pwa.alerts import (
     settings,
     valid_push_endpoint,
 )
-from src.pwa.policy import advance, fresh
+from src.pwa.policy import advance, fresh, WINDOW_SECONDS
 from src.pwa.security import ROOT, check_password, encryption_key, seal, unseal
 from src.pwa.store import Store
 from src.pwa.vision import decode, inspect, recognize, template
@@ -489,7 +489,7 @@ def transition(faces=None, evidence=None, key="checkpoint:main"):
 
 async def finish_window(deadline):
     # ASGI BackgroundTasks are awaited by the request lifecycle, not detached threads.
-    await asyncio.sleep(max(0, min(5, deadline - time.time())))
+    await asyncio.sleep(max(0.0, min(WINDOW_SECONDS, deadline - time.time())))
     await run_in_threadpool(transition)
     await run_in_threadpool(drain_outbox)
 

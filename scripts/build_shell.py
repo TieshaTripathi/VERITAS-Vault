@@ -17,9 +17,9 @@ def icon(page):
 
 
 def dial(identifier="timer"):
-    return f'''<div class="dial" id="{identifier}" role="timer" aria-label="Five-second verification window">
+    return f'''<div class="dial" id="{identifier}" role="timer" aria-label="15-second verification window">
     <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="track" cx="60" cy="60" r="50"/><circle class="arc" cx="60" cy="60" r="50"/></svg>
-    <div class="dial-value"><strong>5.0s</strong><small>/ 5.0 SEC</small></div></div>'''
+    <div class="dial-value"><strong>15.0s</strong><small>/ 15.0 SEC</small></div></div>'''
 
 
 def camera(enrollment=False):
@@ -44,6 +44,7 @@ CHECKPOINT = f'''
   </div>
   <div class="alert-actions">
     <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
+    <button type="button" id="btn-reset-alert" class="reset-btn" hidden>RESET CHECKPOINT</button>
   </div>
 </div>
 <div class="status-banner" id="verdict" role="status">LOCKED · AUTHENTICATE TO BEGIN VERIFICATION</div>
@@ -83,10 +84,10 @@ CHECKPOINT = f'''
   </div>
 </details>
 </section>
-<div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / DUAL-CUSTODY VERIFICATION</h2><span class="badge">Δt ≤ 5.0s</span></div>
+<div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / DUAL-CUSTODY VERIFICATION</h2><span class="badge">Δt ≤ 15.0s</span></div>
 <div class="party" id="party-0"><div class="avatar">1</div><div><strong>Awaiting identity</strong><small>Primary officer / customer</small></div></div>
 <div class="party" id="party-1"><div class="avatar">2</div><div><strong>Awaiting identity</strong><small>Second distinct party</small></div></div>
-<div class="timer-panel">{dial()}<div><span class="eyebrow">TEMPORAL WINDOW</span><h3 id="timer-title">Ready to verify</h3><p id="deadline-note">The first verified identity starts the server-enforced clock.</p></div></div>
+<div class="timer-panel">{dial()}<div><span class="eyebrow">TEMPORAL WINDOW</span><h3 id="timer-title">Ready to verify</h3><p id="deadline-note">The first verified identity starts the 15-second server-enforced clock.</p></div></div>
 <div class="rules"><div class="rule"><span>01</span> Two distinct enrolled identities</div><div class="rule"><span>02</span> NCC ≥ 0.82 · Laplacian ≥ 60.0</div><div class="rule"><span>03</span> SHA-256 notarization · AES-256-GCM</div></div></section>
 <section class="panel" id="alert-center-panel"><div class="panel-head"><h2 class="section-label">03 / ALERT CENTER</h2><span class="badge" id="alert-center-badge">STANDBY</span></div>
 <div class="alert-center-box" id="alert-center-standby">
@@ -112,6 +113,7 @@ CHECKPOINT = f'''
   <div class="alert-center-actions">
     <a href="/audit" id="btn-ac-view-evidence" class="ac-btn view-ev-btn">VIEW EVIDENCE 👁</a>
     <button type="button" id="btn-ack-alert-center" class="ack-btn">ACKNOWLEDGE ALERT</button>
+    <button type="button" id="btn-ac-reset-checkpoint" class="ac-btn reset-btn" hidden>RESET CHECKPOINT</button>
   </div>
 </div></section>
 <dialog id="breach-modal" class="breach-modal" role="alertdialog" aria-modal="true" aria-labelledby="bm-title">
@@ -139,6 +141,7 @@ CHECKPOINT = f'''
     <div class="bm-actions">
       <a href="/audit" id="bm-btn-view" class="bm-btn bm-btn-evidence">VIEW EVIDENCE 👁</a>
       <button type="button" id="bm-btn-ack" class="bm-btn bm-btn-ack">ACKNOWLEDGE ALERT</button>
+      <button type="button" id="bm-btn-reset" class="bm-btn bm-btn-reset" hidden>RESET CHECKPOINT</button>
     </div>
   </div>
 </dialog>
@@ -183,7 +186,7 @@ LOGS = '''<section class="panel"><div class="panel-head"><h2 class="section-labe
 <p class="callout">Decrypted server-side in memory for authenticated operators only. Payloads are never placed in the offline cache.</p></dialog>'''
 
 CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">THREAT SIMULATION LAB</h2><span class="badge">ISOLATED PREVIEW</span></div><p>Exercise the visual states without touching the live checkpoint or sending alerts.</p>
-<div class="sim-grid"><button data-simulate="spoof"><b>◈ Presentation spoof</b><small>Simulate a printed / replayed face</small></button><button data-simulate="intruder"><b>⌖ Unregistered intruder</b><small>Simulate an unknown identity</small></button><button data-simulate="timeout"><b>◷ Single-custody timeout</b><small>Run the complete 5.0s window</small></button><button data-simulate="granted"><b>✓ Valid dual custody</b><small>Preview the granted state</small></button></div>
+<div class="sim-grid"><button data-simulate="spoof"><b>◈ Presentation spoof</b><small>Simulate a printed / replayed face</small></button><button data-simulate="intruder"><b>⌖ Unregistered intruder</b><small>Simulate an unknown identity</small></button><button data-simulate="timeout"><b>◷ Single-custody timeout</b><small>Run the complete 15.0s window</small></button><button data-simulate="granted"><b>✓ Valid dual custody</b><small>Preview the granted state</small></button></div>
 <div class="sim-result" id="sim-result" role="status">Select a scenario to begin.</div>{dial('sim-timer')}<p class="callout">All results in this panel are synthetic. No biometric decisions, evidence records, or alerts are created.</p></section>
 <section class="panel"><div class="panel-head"><h2 class="section-label">SYSTEM HEALTH & READINESS</h2><span class="badge">ZERO TRUST</span></div><div class="config-grid">
   <div class="config-status">Storage<span id="storage-status">CONNECTED</span></div>
