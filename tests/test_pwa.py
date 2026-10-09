@@ -40,8 +40,10 @@ def signin(client):
     return response
 
 
-def person(id="A", role="Employee", **changes):
-    return dict(id=id, name="Test " + id, role=role, is_recognized=True, is_live=True, **changes)
+def person(id="A", role="Employee", name=None, **changes):
+    res = dict(id=id, name=name or ("Test " + id), role=role, is_recognized=True, is_live=True)
+    res.update(changes)
+    return res
 
 
 def jpeg():
@@ -1113,6 +1115,127 @@ def test_fifteen_second_dual_custody_full_lifecycle(client):
     assert reset_data["state"] == "STANDBY"
     assert reset_data["deadline"] is None
     assert reset_data["parties"] == []
+
+
+def test_part8_sequential_dual_custody():
+    # 1. Person A recognized -> WAITING
+    emp_a = person(id="EMP-A", role="Employee", name="Alice")
+    state, term = advance(fresh(), [emp_a], 100.0, "frame_a1")
+    assert state["state"] == "WAITING"
+    assert not term
+    assert len(state["parties"]) == 1
+    assert state["parties"][0]["id"] == "EMP-A"
+    assert state["deadline"] == 115.0
+
+    # 2. Person A scanned repeatedly -> still one party, duplicate_first_party == True
+    for t, f_id in [(102.0, "frame_a2"), (104.0, "frame_a3"), (106.0, "frame_a4")]:
+        state, term = advance(state, [emp_a], t, f_id)
+        assert state["state"] == "WAITING"
+        assert not term
+        assert len(state["parties"]) == 1
+        assert state["deadline"] == 115.0  # timer not restarted
+        assert state["duplicate_first_party"] is True
+        assert state["safe_user_message"] == "ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON"
+
+    # 3. Person A leaves frame -> state remains WAITING
+    state, term = advance(state, [], 108.0)
+    assert state["state"] == "WAITING"
+    assert not term
+    assert len(state["parties"]) == 1
+    assert state["deadline"] == 115.0
+
+    # 6. Same identity twice -> not GRANTED
+    state_repeat, term_repeat = advance(state, [emp_a], 109.0, "frame_a5")
+    assert state_repeat["state"] == "WAITING"
+    assert not term_repeat
+    assert len(state_repeat["parties"]) == 1
+
+    # 4 & 5. Person B distinct identity (Customer) enters -> GRANTED standard
+    cust_b = person(id="CUST-B", role="Customer", name="Bob")
+    state_grant, term_grant = advance(state, [cust_b], 110.0, "frame_b1")
+    assert state_grant["state"] == "GRANTED"
+    assert term_grant
+    assert len(state_grant["parties"]) == 2
+    assert "Distinct identities verified within 15 seconds" in state_grant["reason"]
+
+    # High-value mode: Employee + Employee
+    hv_state, _ = advance(fresh("high-value"), [emp_a], 100.0, "hv_a")
+    assert hv_state["state"] == "WAITING"
+    # Same employee again -> still WAITING
+    hv_state, _ = advance(hv_state, [emp_a], 102.0, "hv_a_rep")
+    assert hv_state["state"] == "WAITING"
+    assert len(hv_state["parties"]) == 1
+    # Different employee -> GRANTED
+    emp_c = person(id="EMP-C", role="Employee", name="Charlie")
+    hv_grant, hv_term = advance(hv_state, [emp_c], 104.0, "hv_c")
+    assert hv_grant["state"] == "GRANTED"
+    assert hv_term
+    assert len(hv_grant["parties"]) == 2
+
+
+def test_part8_reset_all_enrollments_endpoint(client, monkeypatch):
+    signin(client)
+    monkeypatch.setattr(backend, "inspect", lambda frame: ([{"bbox": [10, 10, 80, 80], "variance": 100.0, "is_live": True, "crop": np.zeros((80, 80, 3), dtype=np.uint8)}], {"lighting_ok": True, "aligned": True, "texture_ok": True, "face_count": 1}))
+    monkeypatch.setattr(backend, "template", lambda face, pid: base64.b64encode(b"dummy_template").decode())
+    
+    r1 = client.post("/api/enrollment", json={"image": jpeg(), "name": "Emp One", "personnel_id": "EMP-RESET1", "role": "Employee"})
+    assert r1.status_code == 200, r1.text
+    r2 = client.post("/api/enrollment", json={"image": jpeg(), "name": "Cust Two", "personnel_id": "CUST-RESET2", "role": "Customer"})
+    assert r2.status_code == 200, r2.text
+
+    people = client.get("/api/personnel").json()
+    assert len(people) >= 2
+
+    # Generate an audit log event
+    client.post("/api/checkpoint/reset", json={"mode": "standard"})
+    logs_before = client.get("/api/logs").json()
+    assert len(logs_before) >= 1
+
+    # 9. Reset all enrollments removes all personnel
+    del_res = client.delete("/api/personnel")
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted"] >= 2
+
+    # After completion: personnel list is empty
+    people_after = client.get("/api/personnel").json()
+    assert len(people_after) == 0
+
+    # 10. Audit logs remain after enrollment reset
+    logs_after = client.get("/api/logs").json()
+    assert len(logs_after) == len(logs_before)
+
+
+def test_part8_operator_cannot_reset_enrollments(client):
+    signin(client)
+    store = Store()
+    key, record, version = store.records("auth:")[0]
+    record["role"] = "operator"
+    store.cas(key, version, record)
+
+    res = client.delete("/api/personnel")
+    assert res.status_code == 403
+
+
+def test_part8_scan_deduplication_and_repeated_breach(client, monkeypatch):
+    signin(client)
+    intruder = person(id="unknown", name="Intruder", is_recognized=False, is_live=True)
+    monkeypatch.setattr(backend, "recognize", lambda frame, people: ([intruder], {"texture_ok": True, "face_count": 1}))
+
+    # Scan 20 times with continuous unauthorized face
+    results = []
+    for _ in range(20):
+        res = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+        assert res.status_code == 200
+        results.append(res.json())
+
+    for r in results:
+        assert r["state"] == "BREACH"
+        assert r["reason_code"] == "ZT-001"
+
+    # 11. Same breach scanned 20 times -> exactly one audit event created
+    logs = client.get("/api/logs").json()
+    breach_logs = [l for l in logs if l.get("verdict") == "BREACH"]
+    assert len(breach_logs) == 1
 
 
 

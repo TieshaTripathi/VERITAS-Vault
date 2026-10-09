@@ -78,12 +78,17 @@ $("#enroll-form").onsubmit = (event) => {
   });
 };
 async function loadPeople() {
-  if (currentUser?.role !== "admin") return;
+  const dangerZone = $("#danger-zone-panel");
+  if (currentUser?.role !== "admin") {
+    if (dangerZone) dangerZone.hidden = true;
+    return;
+  }
+  if (dangerZone) dangerZone.hidden = false;
   try {
     const people = await api("/personnel");
     $("#personnel-list").replaceChildren();
     if (!people.length) {
-      $("#personnel-list").textContent = "No personnel enrolled yet.";
+      $("#personnel-list").textContent = "No personnel enrolled.";
       return;
     }
     for (const person of people) {
@@ -96,7 +101,29 @@ async function loadPeople() {
     toast(error.message);
   }
 }
+
+const btnResetEnrollments = $("#btn-reset-enrollments");
+if (btnResetEnrollments) {
+  btnResetEnrollments.onclick = async () => {
+    if (currentUser?.role !== "admin") return;
+    const ok = window.confirm("Delete all enrolled biometric identities?");
+    if (!ok) return;
+    try {
+      btnResetEnrollments.disabled = true;
+      const res = await api("/personnel", { method: "DELETE" });
+      toast(`All enrolled identities reset (${res.deleted || 0} deleted).`);
+      await loadPeople();
+      $("#personnel-list").textContent = "No personnel enrolled.";
+    } catch (err) {
+      toast(err.message || "Failed to reset enrollments.");
+    } finally {
+      btnResetEnrollments.disabled = false;
+    }
+  };
+}
+
 document.addEventListener("vault-auth", loadPeople);
 loadPeople();
 addEventListener("pagehide", stop);
 addEventListener("offline", stop);
+

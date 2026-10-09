@@ -57,11 +57,18 @@ def advance(state, faces, now, digest=None):
         return result, True
 
     # 4. Identity Registration & Custody Window Start
+    duplicate_first = False
+    new_faces = []
     for face in faces:
-        if not any(p["id"] == face["id"] for p in result["parties"]):
-            result["parties"].append({k: face[k] for k in ("id", "name", "role")})
-            if result["deadline"] is None:
-                result["deadline"] = now + WINDOW_SECONDS
+        if any(p["id"] == face["id"] for p in result["parties"]):
+            duplicate_first = True
+        else:
+            new_faces.append(face)
+
+    for face in new_faces:
+        result["parties"].append({k: face[k] for k in ("id", "name", "role")})
+        if result["deadline"] is None:
+            result["deadline"] = now + WINDOW_SECONDS
 
     # 5. Continuous Risk Calculation
     best_bio = max((f.get("confidence", 0.0) for f in faces), default=0.85)
@@ -78,7 +85,8 @@ def advance(state, faces, now, digest=None):
         result.update(
             state="GRANTED",
             reason=f"Distinct identities verified within {int(WINDOW_SECONDS)} seconds",
-            safe_user_message="ACCESS GRANTED: Proceed to vault entry"
+            safe_user_message="ACCESS GRANTED: Proceed to vault entry",
+            duplicate_first_party=False
         )
         return result, True
 
@@ -86,7 +94,12 @@ def advance(state, faces, now, digest=None):
         result.update(
             state="WAITING",
             reason="First identity verified; awaiting second party",
-            reason_code="ZT-007",
-            safe_user_message="PRIMARY VERIFIED: Awaiting second authorized party"
+            reason_code="ZT-007"
         )
+        if duplicate_first and not new_faces:
+            result["safe_user_message"] = "ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON"
+            result["duplicate_first_party"] = True
+        else:
+            result["safe_user_message"] = "PRIMARY VERIFIED: Awaiting second authorized party"
+            result["duplicate_first_party"] = False
     return result, False

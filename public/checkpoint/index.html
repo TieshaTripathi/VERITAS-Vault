@@ -24,9 +24,12 @@
     <div class="empty" id="camera-empty"><div class="reticle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 10 5-3v10l-5-3"/></svg></div><b>VAULT CHAMBER / CAM 01</b><p>Start the camera when you are ready.<br>Your browser will request camera permission.</p></div>
     <i class="hud-corner tl"></i><i class="hud-corner tr"></i><i class="hud-corner bl"></i><i class="hud-corner br"></i><i class="scanline"></i>
     <div class="camera-meta"><span>ENCRYPTED INGESTION</span><span>640 × 480 / LOCAL PREVIEW</span></div></div>
+<div class="camera-controls-bar" id="camera-controls-bar">
+  <button type="button" class="primary" id="start-camera">START CAMERA</button>
+  <button type="button" class="quiet" id="stop-camera" disabled>STOP CAMERA</button>
+</div>
 <div class="camera-fallback" id="camera-fallback-bar" hidden>
   <span id="camera-prompt-text">CAMERA PERMISSION REQUIRED</span>
-  <button class="primary" id="start-camera">START CAMERA</button>
 </div>
 <div class="telemetry">
   <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div>
@@ -42,12 +45,6 @@
   <summary class="diagnostics-summary">⚙ ADVANCED / DIAGNOSTICS</summary>
   <div class="diagnostics-content">
     <div class="diag-group">
-      <span class="diag-label">Surveillance Camera Stream</span>
-      <div class="diag-actions">
-        <button id="stop-camera" class="quiet" disabled>Stop camera</button>
-      </div>
-    </div>
-    <div class="diag-group">
       <span class="diag-label">Diagnostic Alarms & Alerts</span>
       <div class="diag-actions">
         <button type="button" id="btn-test-siren" class="quiet">Test Siren 🔊</button>
@@ -59,6 +56,19 @@
 </details>
 </section>
 <div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / DUAL-CUSTODY VERIFICATION</h2><span class="badge">Δt ≤ 15.0s</span></div>
+<div class="waiting-instruction-card" id="waiting-instruction-card" hidden>
+  <div class="waiting-header"><span class="step-badge">STEP 1 COMPLETE</span><strong id="waiting-primary-name" style="color:var(--amber,#f59e0b)">PRIMARY VERIFIED</strong></div>
+  <div class="waiting-action">
+    <strong>NOW SCAN SECOND PERSON</strong>
+    <p>Move first person out of frame.<br>Second authorized person must appear within 15s.</p>
+  </div>
+  <div class="telemetry waiting-telemetry">
+    <div class="stat"><span class="stat-label">FIRST PARTY</span><strong id="tel-first-party">—</strong></div>
+    <div class="stat"><span class="stat-label">CURRENT FACE</span><strong id="tel-current-face">—</strong></div>
+    <div class="stat"><span class="stat-label">DISTINCT</span><strong id="tel-distinct">—</strong></div>
+    <div class="stat"><span class="stat-label">REMAINING</span><strong id="tel-remaining">—</strong></div>
+  </div>
+</div>
 <div class="party" id="party-0"><div class="avatar">1</div><div><strong>Awaiting identity</strong><small>Primary officer / customer</small></div></div>
 <div class="party" id="party-1"><div class="avatar">2</div><div><strong>Awaiting identity</strong><small>Second distinct party</small></div></div>
 <div class="timer-panel"><div class="dial" id="timer" role="timer" aria-label="15-second verification window">

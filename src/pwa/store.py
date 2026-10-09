@@ -6,7 +6,9 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from src.pwa.security import data_dir
+from urllib.parse import quote
+
+from src.pwa.security import data_dir, ROOT
 from src.storage.supabase_client import SupabaseCloud, CloudUnavailable
 
 
@@ -183,3 +185,50 @@ class Store:
         if not target.is_relative_to(data_dir().resolve()):
             raise ValueError("Invalid evidence path")
         return target.read_bytes()
+
+    def delete_blob(self, path: str):
+        if self.cloud:
+            try:
+                self.cloud.request("DELETE", "/storage/v1/object/encrypted-evidence/" + quote(path, safe="/"))
+            except Exception:
+                pass
+        else:
+            target = (data_dir() / path).resolve()
+            if target.is_relative_to(data_dir().resolve()) and target.exists():
+                try:
+                    target.unlink()
+                except Exception:
+                    pass
+
+    def clear_personnel(self) -> int:
+        people = self.personnel()
+        count = len(people)
+        for person in people:
+            if person.get("baseline"):
+                self.delete_blob(person["baseline"])
+            local_kf = ROOT / "models" / "known_faces" / f"{person.get('id', '')}.enc"
+            if local_kf.exists():
+                try:
+                    local_kf.unlink()
+                except Exception:
+                    pass
+
+        baselines_dir = data_dir() / "baselines"
+        if baselines_dir.exists():
+            for p in baselines_dir.glob("*.enc"):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+
+        if self.cloud:
+            try:
+                self.cloud.request("DELETE", "/rest/v1/enrolled_users?id=not.is.null")
+            except Exception:
+                pass
+        else:
+            with self.db() as conn:
+                cur = conn.execute("DELETE FROM enrolled_users")
+                count = max(count, cur.rowcount)
+        return count
+

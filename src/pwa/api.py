@@ -427,6 +427,16 @@ def personnel(user=Depends(admin)):
     return [{k: p[k] for k in ("id", "name", "role", "created_at")} for p in Store().personnel()]
 
 
+@app.delete("/api/personnel")
+def reset_all_personnel(user=Depends(admin)):
+    rate_limit("clear_personnel:" + user["id"], 5)
+    store = Store()
+    deleted = store.clear_personnel()
+    from src.pwa.vision import detector
+    detector.cache_clear()
+    return {"deleted": deleted}
+
+
 def transition(faces=None, evidence=None, key="checkpoint:main"):
     store = Store()
     for _ in range(8):
@@ -635,7 +645,7 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
         store.save_blob(path, seal(raw, "evidence:" + digest))
         proof = {"path": path, "sha256": digest, "shape": list(frame.shape),
                  "encoding": "BGR uint8 decoded pixels", "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1")}
-    result, terminal = transition(faces if proof else [], proof)
+    result, terminal = transition(faces, proof)
     result.update(faces=faces, quality=quality_report, frame_size=frame_size)
     if result["state"] == "GRANTED":
         result["authorization_token"] = default_pdp._issue_signed_authorization(
@@ -652,6 +662,22 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
 
     result["active_incident"] = active_incident_id or result.get("last_event") or "NONE"
     result["incident_code"] = result.get("reason_code") or "NONE"
+
+    if result.get("state") == "WAITING" and result.get("parties"):
+        first_p = result["parties"][0]
+        result["first_party"] = f"{first_p.get('id')} / {first_p.get('name')}"
+        if faces and len(faces) > 0:
+            curr_f = faces[0]
+            curr_id = curr_f.get("id", "unknown")
+            curr_name = curr_f.get("name", "Unknown individual")
+            result["current_face"] = f"{curr_id} / {curr_name}"
+            result["distinct_face"] = "NO" if curr_id == first_p.get("id") else ("YES" if curr_f.get("is_recognized") else "UNKNOWN")
+        else:
+            result["current_face"] = "NONE (FRAME EMPTY)"
+            result["distinct_face"] = "WAITING"
+        if result.get("deadline"):
+            result["remaining_seconds"] = max(0.0, round(result["deadline"] - now, 1))
+            result["remaining"] = max(0.0, result["deadline"] - now)
 
     if result["state"] == "WAITING":
         background.add_task(finish_window, result["deadline"])
@@ -689,6 +715,15 @@ def tick(background: BackgroundTasks, user=Depends(operator)):
     active_inc, _ = store.get("incident:active")
     result["active_incident"] = active_inc.get("id") if (active_inc and result.get("state") == "BREACH") else (result.get("last_event") or "NONE")
     result["incident_code"] = result.get("reason_code") or "NONE"
+    now = time.time()
+    if result.get("state") == "WAITING" and result.get("parties"):
+        first_p = result["parties"][0]
+        result["first_party"] = f"{first_p.get('id')} / {first_p.get('name')}"
+        result["current_face"] = "AWAITING INCOMING"
+        result["distinct_face"] = "WAITING"
+        if result.get("deadline"):
+            result["remaining_seconds"] = max(0.0, round(result["deadline"] - now, 1))
+            result["remaining"] = max(0.0, result["deadline"] - now)
     return result
 
 

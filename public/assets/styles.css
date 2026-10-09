@@ -1666,3 +1666,87 @@ a.button:hover {
     filter: drop-shadow(0 0 12px #ef4444);
   }
 }
+
+/* =========================================================
+   WAITING INSTRUCTION CARD & DANGER ZONE STYLES
+   ========================================================= */
+
+.camera-controls-bar {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0;
+  align-items: center;
+}
+
+.waiting-instruction-card {
+  background: rgba(15, 23, 42, 0.95);
+  border: 2px solid var(--amber, #f59e0b);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 0 20px rgba(245, 158, 11, 0.25);
+  animation: waiting-pulse 2s infinite ease-in-out;
+}
+
+@keyframes waiting-pulse {
+  0%, 100% { border-color: #f59e0b; box-shadow: 0 0 15px rgba(245, 158, 11, 0.2); }
+  50% { border-color: #fbbf24; box-shadow: 0 0 28px rgba(245, 158, 11, 0.45); }
+}
+
+.waiting-instruction-card .step-badge {
+  display: inline-block;
+  background: #f59e0b;
+  color: #0b0f19;
+  font-family: 'Share Tech Mono', Consolas, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  margin-right: 10px;
+}
+
+.waiting-instruction-card .waiting-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.waiting-instruction-card .waiting-action strong {
+  color: var(--cyan, #00f0ff);
+  font-family: 'Share Tech Mono', Consolas, monospace;
+  font-size: 15px;
+  letter-spacing: 1.5px;
+  display: block;
+}
+
+.waiting-instruction-card .waiting-action p {
+  color: #cbd5e1;
+  font-size: 13px;
+  margin: 4px 0 10px 0;
+  line-height: 1.4;
+}
+
+.waiting-instruction-card .waiting-telemetry {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  background: rgba(6, 11, 20, 0.7);
+  border: 1px solid var(--line, #1f293d);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.danger-zone-panel {
+  border-color: rgba(239, 68, 68, 0.4);
+  background: rgba(239, 68, 68, 0.04);
+}
+
+.danger-zone-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+

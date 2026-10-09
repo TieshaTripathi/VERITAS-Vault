@@ -50,9 +50,12 @@ CHECKPOINT = f'''
 <div class="status-banner" id="verdict" role="status">LOCKED · AUTHENTICATE TO BEGIN VERIFICATION</div>
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / LIVE BIOMETRIC FEED</h2><span class="badge" id="feed-state">STANDBY</span></div>
 {camera()}
+<div class="camera-controls-bar" id="camera-controls-bar">
+  <button type="button" class="primary" id="start-camera">START CAMERA</button>
+  <button type="button" class="quiet" id="stop-camera" disabled>STOP CAMERA</button>
+</div>
 <div class="camera-fallback" id="camera-fallback-bar" hidden>
   <span id="camera-prompt-text">CAMERA PERMISSION REQUIRED</span>
-  <button class="primary" id="start-camera">START CAMERA</button>
 </div>
 <div class="telemetry">
   <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div>
@@ -68,12 +71,6 @@ CHECKPOINT = f'''
   <summary class="diagnostics-summary">⚙ ADVANCED / DIAGNOSTICS</summary>
   <div class="diagnostics-content">
     <div class="diag-group">
-      <span class="diag-label">Surveillance Camera Stream</span>
-      <div class="diag-actions">
-        <button id="stop-camera" class="quiet" disabled>Stop camera</button>
-      </div>
-    </div>
-    <div class="diag-group">
       <span class="diag-label">Diagnostic Alarms & Alerts</span>
       <div class="diag-actions">
         <button type="button" id="btn-test-siren" class="quiet">Test Siren 🔊</button>
@@ -85,6 +82,19 @@ CHECKPOINT = f'''
 </details>
 </section>
 <div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / DUAL-CUSTODY VERIFICATION</h2><span class="badge">Δt ≤ 15.0s</span></div>
+<div class="waiting-instruction-card" id="waiting-instruction-card" hidden>
+  <div class="waiting-header"><span class="step-badge">STEP 1 COMPLETE</span><strong id="waiting-primary-name" style="color:var(--amber,#f59e0b)">PRIMARY VERIFIED</strong></div>
+  <div class="waiting-action">
+    <strong>NOW SCAN SECOND PERSON</strong>
+    <p>Move first person out of frame.<br>Second authorized person must appear within 15s.</p>
+  </div>
+  <div class="telemetry waiting-telemetry">
+    <div class="stat"><span class="stat-label">FIRST PARTY</span><strong id="tel-first-party">—</strong></div>
+    <div class="stat"><span class="stat-label">CURRENT FACE</span><strong id="tel-current-face">—</strong></div>
+    <div class="stat"><span class="stat-label">DISTINCT</span><strong id="tel-distinct">—</strong></div>
+    <div class="stat"><span class="stat-label">REMAINING</span><strong id="tel-remaining">—</strong></div>
+  </div>
+</div>
 <div class="party" id="party-0"><div class="avatar">1</div><div><strong>Awaiting identity</strong><small>Primary officer / customer</small></div></div>
 <div class="party" id="party-1"><div class="avatar">2</div><div><strong>Awaiting identity</strong><small>Second distinct party</small></div></div>
 <div class="timer-panel">{dial()}<div><span class="eyebrow">TEMPORAL WINDOW</span><h3 id="timer-title">Ready to verify</h3><p id="deadline-note">The first verified identity starts the 15-second server-enforced clock.</p></div></div>
@@ -158,7 +168,14 @@ ENROLLMENT = f'''
 <label>Access role<select id="role"><option>Employee</option><option>Customer</option></select></label>
 <div class="form-actions"><button class="primary" id="enroll-submit" type="submit" disabled>Capture & enroll identity</button></div></form>
 <p class="callout">Biometric templates and cropped baselines are encrypted before storage. Duplicate personnel IDs are rejected.</p></section>
-<section class="panel"><div class="panel-head"><h2 class="section-label">ENROLLED PERSONNEL</h2></div><div id="personnel-list" class="muted">Sign in as an administrator to view the registry.</div></section></div></div>'''
+<section class="panel"><div class="panel-head"><h2 class="section-label">ENROLLED PERSONNEL</h2></div><div id="personnel-list" class="muted">Sign in as an administrator to view the registry.</div></section>
+<section class="panel danger-zone-panel" id="danger-zone-panel" hidden><div class="panel-head"><h2 class="section-label" style="color:var(--red,#ef4444)">ADVANCED / DANGER ZONE</h2><span class="badge" style="background:rgba(239,68,68,0.2);color:#ef4444;border-color:rgba(239,68,68,0.4)">ADMIN ONLY</span></div>
+<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Irreversible administrative actions for biometric enrollment baselines. Access audit logs and forensic evidence are strictly preserved.</p>
+<div class="danger-zone-actions">
+  <button type="button" id="btn-reset-enrollments" class="button" style="background:#ef4444;color:#fff;border-color:#ef4444;font-weight:600">RESET ALL ENROLLMENTS</button>
+</div>
+</section>
+</div></div>'''
 
 LOGS = '''<section class="panel"><div class="panel-head"><h2 class="section-label">FORENSIC EVIDENCE LEDGER</h2><span class="badge" id="event-count">AUTHENTICATION REQUIRED</span></div>
 <form class="filters" id="filters"><label>Verdict<select id="filter-status"><option value="">All events</option><option>GRANTED</option><option>DENIED</option><option>BREACH</option><option>RESET</option></select></label><label>From / UTC<input type="date" id="date-start"></label><label>Through / UTC<input type="date" id="date-end"></label><button class="primary" type="submit">Apply filters</button><button type="button" id="refresh">↻ Refresh</button></form>

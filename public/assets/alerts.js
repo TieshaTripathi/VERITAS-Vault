@@ -351,13 +351,19 @@ export function evaluateSecurityEvent(result) {
   if (!result || typeof result !== "object") return;
 
   const state = result.state || "";
-  const reasonCode = result.reason_code || "";
+  const reasonCode = result.reason_code || result.incident_code || "";
   const reason = result.reason || "";
-  const hasUnrecognized = Array.isArray(result.faces) && result.faces.some((f) => !f.is_recognized);
-  const hasSpoof = Array.isArray(result.faces) && result.faces.some((f) => !f.is_live);
+  const isDuplicateFirst = Boolean(result.duplicate_first_party);
 
-  // Do not alarm for STANDBY, WAITING, GRANTED, RESET
-  if (state === "STANDBY" || state === "WAITING" || state === "GRANTED" || state === "RESET") {
+  // PART 6: Do NOT show breach popup for:
+  // STANDBY, WAITING, GRANTED, recognized duplicate first user, RESET
+  if (
+    state === "STANDBY" ||
+    state === "WAITING" ||
+    state === "GRANTED" ||
+    state === "RESET" ||
+    isDuplicateFirst
+  ) {
     if (state === "GRANTED" || state === "RESET") {
       stopAlarm();
     }
@@ -367,12 +373,24 @@ export function evaluateSecurityEvent(result) {
     return;
   }
 
-  // Critical breach detection
+  // PART 6: For biometric recognition specifically:
+  // if all faces are is_recognized == true AND is_live == true: NO popup.
+  if (Array.isArray(result.faces) && result.faces.length > 0) {
+    const allValid = result.faces.every((f) => f.is_recognized && f.is_live);
+    if (allValid && state !== "BREACH") {
+      return;
+    }
+  }
+
+  const hasSpoof = Array.isArray(result.faces) && result.faces.some((f) => !f.is_live);
+  const hasUnrecognized = Array.isArray(result.faces) && result.faces.some((f) => !f.is_recognized);
+
+  // Critical failure identification
   let code = reasonCode;
-  if (!code) {
+  if (!code || code === "NONE") {
     if (hasSpoof || reason.toLowerCase().includes("spoof")) {
       code = "ZT-002";
-    } else if (hasUnrecognized || reason.toLowerCase().includes("unregistered") || reason.toLowerCase().includes("unauthorized")) {
+    } else if (hasUnrecognized || reason.toLowerCase().includes("unregistered") || reason.toLowerCase().includes("unauthorized") || reason.toLowerCase().includes("unknown")) {
       code = "ZT-001";
     } else if (reason.toLowerCase().includes("expired") || reason.toLowerCase().includes("timeout")) {
       code = "ZT-008";
@@ -385,53 +403,74 @@ export function evaluateSecurityEvent(result) {
     }
   }
 
-  const isCritical = state === "BREACH" || CRITICAL_REASON_CODES.includes(code);
-
-  if (isCritical) {
-    const eventId =
-      result.last_event ||
-      result.id ||
-      `BREACH-${code}-${Date.now()}`;
-
-    const subtitle =
-      code === "ZT-001"
-        ? "UNAUTHORIZED PERSON DETECTED"
-        : code === "ZT-002"
-          ? "BIOMETRIC SPOOF ATTACK"
-          : code === "ZT-008"
-            ? "CUSTODY TIMEOUT EXPIRED"
-            : code === "ZT-009"
-              ? "REPLAY ATTACK DETECTED"
-              : code === "ZT-013"
-                ? "CAPTURE INTEGRITY VIOLATION"
-                : "SECURITY BREACH DETECTED";
-
-    currentAlert = {
-      id: eventId,
-      code,
-      title: "SECURITY BREACH",
-      subtitle,
-      accessState: "ACCESS DENIED",
-      reason: reason || "Unauthorized person detected at vault checkpoint",
-      timestamp: new Date().toLocaleTimeString(),
-      checkpoint: result.checkpoint_id || "CP-MAIN-01",
-      evidence: "CAPTURED",
-      acknowledged: false,
-      raw: result,
-    };
-
-    // Play Web Audio siren on critical breach
-    startAlarm({ duration: 15000 });
-
-    // Show OS Web Push notification if backgrounded/active
-    sendSecurityNotification({
-      title: "⚠ SECURITY BREACH",
-      body: `${subtitle}\nCheckpoint: ${currentAlert.checkpoint}\nEvidence: CAPTURED · Access Denied`,
-      eventId,
-    });
-
-    dispatchAlertEvent("vault-critical-alert", currentAlert);
+  const isCritical = (state === "BREACH" && CRITICAL_REASON_CODES.includes(code)) || CRITICAL_REASON_CODES.includes(code);
+  if (!isCritical) {
+    return;
   }
+
+  // PART 5: Event deduplication using event ID / last_event as unique key
+  const eventId =
+    result.last_event ||
+    result.active_incident ||
+    result.id ||
+    (code ? `BREACH-${code}` : "BREACH-GENERIC");
+
+  // Rule: If incoming result has the SAME breach event ID as currentAlert.id:
+  // - do NOT reopen modal
+  // - do NOT restart siren
+  // - do NOT resend browser notification
+  // - do NOT reset acknowledged=false
+  // - only update current telemetry/raw result
+  if (currentAlert && currentAlert.id === eventId) {
+    currentAlert.raw = result;
+    return;
+  }
+
+  // PART 7: Acknowledged alert must NEVER reopen for same event ID
+  if (currentAlert?.acknowledged && currentAlert.id === eventId) {
+    currentAlert.raw = result;
+    return;
+  }
+
+  // Only trigger a new popup when a new unique breach event ID appears
+  const subtitle =
+    code === "ZT-001"
+      ? "UNAUTHORIZED PERSON DETECTED"
+      : code === "ZT-002"
+        ? "BIOMETRIC SPOOF ATTACK"
+        : code === "ZT-008"
+          ? "CUSTODY TIMEOUT EXPIRED"
+          : code === "ZT-009"
+            ? "REPLAY ATTACK DETECTED"
+            : code === "ZT-013"
+              ? "CAPTURE INTEGRITY VIOLATION"
+              : "SECURITY BREACH DETECTED";
+
+  currentAlert = {
+    id: eventId,
+    code,
+    title: "SECURITY BREACH",
+    subtitle,
+    accessState: "ACCESS DENIED",
+    reason: reason || "Unauthorized person detected at vault checkpoint",
+    timestamp: new Date().toLocaleTimeString(),
+    checkpoint: result.checkpoint_id || "CP-MAIN-01",
+    evidence: "CAPTURED",
+    acknowledged: false,
+    raw: result,
+  };
+
+  // Play Web Audio siren on new critical breach
+  startAlarm({ duration: 15000 });
+
+  // Show OS Web Push notification once per unique event ID
+  sendSecurityNotification({
+    title: "⚠ SECURITY BREACH",
+    body: `${subtitle}\nCheckpoint: ${currentAlert.checkpoint}\nEvidence: CAPTURED · Access Denied`,
+    eventId,
+  });
+
+  dispatchAlertEvent("vault-critical-alert", currentAlert);
 }
 
 function dispatchAlertEvent(name, detail) {

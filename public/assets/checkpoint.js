@@ -366,8 +366,59 @@ function display(result) {
     state === "GRANTED"
       ? "UNLOCKED · DUAL CUSTODY VERIFIED"
       : state === "WAITING"
-        ? `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`
+        ? (result.duplicate_first_party
+            ? `ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON\n${remText}`
+            : `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`)
         : state + " · " + result.reason;
+
+  if (state === "WAITING" && result.duplicate_first_party && hud) {
+    hud.textContent = "ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON";
+  }
+
+  const waitCard = $("#waiting-instruction-card");
+  if (waitCard) {
+    if (state === "WAITING") {
+      waitCard.hidden = false;
+      const primary = result.parties?.[0];
+      const pName = primary?.name || primary?.id || "Authorized Officer";
+      const wPrimary = $("#waiting-primary-name");
+      if (wPrimary) wPrimary.textContent = `<${pName}> verified`;
+
+      const tFirst = $("#tel-first-party");
+      if (tFirst) tFirst.textContent = result.first_party || (primary ? `${primary.id} / ${primary.name}` : "—");
+
+      const tFace = $("#tel-current-face");
+      if (tFace) {
+        if (result.current_face) {
+          tFace.textContent = result.current_face;
+        } else if (result.faces && result.faces.length > 0) {
+          const f = result.faces[0];
+          tFace.textContent = `${f.id || "unknown"} / ${f.name || "Unknown individual"}`;
+        } else {
+          tFace.textContent = "NONE (FRAME EMPTY)";
+        }
+      }
+
+      const tDistinct = $("#tel-distinct");
+      if (tDistinct) {
+        if (result.distinct_face) {
+          tDistinct.textContent = result.distinct_face;
+        } else if (result.duplicate_first_party) {
+          tDistinct.textContent = "NO";
+        } else if (result.faces && result.faces.length > 0) {
+          const f = result.faces[0];
+          tDistinct.textContent = (primary && f.id === primary.id) ? "NO" : (f.is_recognized ? "YES" : "UNKNOWN");
+        } else {
+          tDistinct.textContent = "WAITING";
+        }
+      }
+
+      const tRem = $("#tel-remaining");
+      if (tRem) tRem.textContent = remText;
+    } else {
+      waitCard.hidden = true;
+    }
+  }
 
   $("#feed-state").textContent = state;
   $("#mode").value = result.mode;
@@ -462,6 +513,9 @@ function updateAlertCenterUI() {
     } else if (cameraStarting) {
       camStatusEl.textContent = "INITIALIZING";
       camStatusEl.style.color = "var(--cyan)";
+    } else if (manuallyStopped) {
+      camStatusEl.textContent = "STOPPED";
+      camStatusEl.style.color = "var(--amber, #f59e0b)";
     } else {
       camStatusEl.textContent = "STANDBY";
       camStatusEl.style.color = "#91a5bc";
@@ -473,6 +527,9 @@ function updateAlertCenterUI() {
     if (stopCamera) {
       scannerStatusEl.textContent = busy ? "SCANNING" : "RUNNING";
       scannerStatusEl.style.color = "var(--green)";
+    } else if (manuallyStopped) {
+      scannerStatusEl.textContent = "PAUSED";
+      scannerStatusEl.style.color = "#91a5bc";
     } else {
       scannerStatusEl.textContent = "STANDBY";
       scannerStatusEl.style.color = "#91a5bc";
@@ -801,6 +858,22 @@ function stop() {
   $("#hud")?.classList.remove("ingesting");
   if ($("#start-camera")) $("#start-camera").disabled = false;
   if ($("#stop-camera")) $("#stop-camera").disabled = true;
+
+  const camStatusEl = $("#camera-status");
+  const scannerStatusEl = $("#scanner-status");
+  if (camStatusEl) {
+    camStatusEl.textContent = "STOPPED";
+    camStatusEl.style.color = "var(--amber, #f59e0b)";
+  }
+  if (scannerStatusEl) {
+    scannerStatusEl.textContent = "PAUSED";
+    scannerStatusEl.style.color = "#91a5bc";
+  }
+  const hud = getHudStatus();
+  if (hud && state !== "BREACH" && state !== "GRANTED") {
+    hud.textContent = "CAMERA STOPPED · SCANNER PAUSED";
+  }
+
   updateAlertCenterUI();
 }
 
@@ -1023,6 +1096,18 @@ async function poll() {
 }
 
 setInterval(poll, 1000);
+
+setInterval(() => {
+  if (state === "WAITING") {
+    const remaining = Math.max(0, (end - performance.now()) / 1000);
+    const remText = remaining.toFixed(1) + "s remaining";
+    const tRem = $("#tel-remaining");
+    if (tRem) tRem.textContent = remText;
+    const deadlineNote = $("#deadline-note");
+    if (deadlineNote) deadlineNote.textContent = `Awaiting second authorized party · ${remText}`;
+    ring($("#ring"), state, remaining, 15);
+  }
+}, 100);
 
 /**
  * KEY FIX: vault-auth fires AFTER initialize() in common.js resolves and
