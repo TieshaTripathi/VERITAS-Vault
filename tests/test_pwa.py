@@ -1238,5 +1238,86 @@ def test_part8_scan_deduplication_and_repeated_breach(client, monkeypatch):
     assert len(breach_logs) == 1
 
 
+def test_part_b_fresh_standby_valid_employee_never_breach():
+    # Fresh STANDBY checkpoint + valid recognized & live Employee
+    state = fresh()
+    assert state["state"] == "STANDBY"
+    assert state["deadline"] is None
+
+    emp = person(id="EMP-001", role="Employee", name="Valid Employee", is_recognized=True, is_live=True)
+    res, terminal = advance(state, [emp], 100.0, "frame_fresh")
+
+    # MUST transition STANDBY -> WAITING
+    assert res["state"] == "WAITING"
+    assert res["reason_code"] == "ZT-007"
+    assert len(res["parties"]) == 1
+    assert res["parties"][0]["id"] == "EMP-001"
+    assert res["deadline"] == 115.0
+    assert not terminal
+    assert res["state"] != "BREACH"
+
+
+def test_part_g_production_sequence(client, monkeypatch):
+    signin(client)
+    emp = person(id="EMP-01", role="Employee", name="Alice", is_recognized=True, is_live=True)
+    cust = person(id="CUST-01", role="Customer", name="Bob", is_recognized=True, is_live=True)
+    intruder = person(id="unknown", role="Unauthorized", name="Intruder", is_recognized=False, is_live=True)
+
+    # 1. RESET CHECKPOINT
+    r_reset = client.post("/api/checkpoint/reset", json={"mode": "standard"})
+    assert r_reset.status_code == 200
+    # 2. state = STANDBY
+    assert r_reset.json()["state"] == "STANDBY"
+
+    # 3. scan valid Employee -> WAITING, no breach
+    monkeypatch.setattr(backend, "recognize", lambda f, p: ([emp], {"texture_ok": True, "face_count": 1}))
+    r_emp = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r_emp.status_code == 200
+    assert r_emp.json()["state"] == "WAITING"
+    assert r_emp.json()["reason_code"] == "ZT-007"
+    assert len(r_emp.json()["parties"]) == 1
+
+    # 4. keep same person visible -> WAITING
+    r_emp_again = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r_emp_again.status_code == 200
+    assert r_emp_again.json()["state"] == "WAITING"
+    assert len(r_emp_again.json()["parties"]) == 1
+    assert r_emp_again.json().get("duplicate_first_party") is True
+
+    # 5. bring valid Customer -> GRANTED
+    monkeypatch.setattr(backend, "recognize", lambda f, p: ([cust], {"texture_ok": True, "face_count": 1}))
+    r_cust = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r_cust.status_code == 200
+    assert r_cust.json()["state"] == "GRANTED"
+
+    # Reset to prepare for real breach test
+    client.post("/api/checkpoint/reset", json={"mode": "standard"})
+
+    # 6. create one real breach -> BREACH
+    monkeypatch.setattr(backend, "recognize", lambda f, p: ([intruder], {"texture_ok": True, "face_count": 1}))
+    r_breach = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r_breach.status_code == 200
+    assert r_breach.json()["state"] == "BREACH"
+    assert r_breach.json()["reason_code"] == "ZT-001"
+
+    # Latched terminal check: scanning with valid Employee while previous breach is latched returns latched_terminal
+    monkeypatch.setattr(backend, "recognize", lambda f, p: ([emp], {"texture_ok": True, "face_count": 1}))
+    r_latched = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r_latched.status_code == 200
+    assert r_latched.json()["state"] == "BREACH"
+    assert r_latched.json().get("latched_terminal") is True
+
+    # 8. reset checkpoint -> STANDBY
+    r_reset2 = client.post("/api/checkpoint/reset", json={"mode": "standard"})
+    assert r_reset2.status_code == 200
+    assert r_reset2.json()["state"] == "STANDBY"
+
+    # 9. valid Employee again -> WAITING, not BREACH
+    r_emp2 = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r_emp2.status_code == 200
+    assert r_emp2.json()["state"] == "WAITING"
+    assert r_emp2.json()["reason_code"] == "ZT-007"
+
+
 
 

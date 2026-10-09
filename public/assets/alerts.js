@@ -355,14 +355,15 @@ export function evaluateSecurityEvent(result) {
   const reason = result.reason || "";
   const isDuplicateFirst = Boolean(result.duplicate_first_party);
 
-  // PART 6: Do NOT show breach popup for:
-  // STANDBY, WAITING, GRANTED, recognized duplicate first user, RESET
+  // PART 6 & PART F: Do NOT show breach popup for:
+  // STANDBY, WAITING, GRANTED, recognized duplicate first user, ZT-007, RESET
   if (
     state === "STANDBY" ||
     state === "WAITING" ||
     state === "GRANTED" ||
     state === "RESET" ||
-    isDuplicateFirst
+    isDuplicateFirst ||
+    reasonCode === "ZT-007"
   ) {
     if (state === "GRANTED" || state === "RESET") {
       stopAlarm();
@@ -373,11 +374,18 @@ export function evaluateSecurityEvent(result) {
     return;
   }
 
-  // PART 6: For biometric recognition specifically:
+  // PART 6 & PART F: For biometric recognition specifically:
   // if all faces are is_recognized == true AND is_live == true: NO popup.
   if (Array.isArray(result.faces) && result.faces.length > 0) {
     const allValid = result.faces.every((f) => f.is_recognized && f.is_live);
-    if (allValid && state !== "BREACH") {
+    if (allValid) {
+      return;
+    }
+  }
+
+  // Terminal state guard: if result is a latched terminal breach from previous session
+  if (result.latched_terminal) {
+    if (!result.faces || result.faces.length === 0 || result.faces.every((f) => f.is_recognized && f.is_live)) {
       return;
     }
   }
@@ -403,7 +411,7 @@ export function evaluateSecurityEvent(result) {
     }
   }
 
-  const isCritical = (state === "BREACH" && CRITICAL_REASON_CODES.includes(code)) || CRITICAL_REASON_CODES.includes(code);
+  const isCritical = state === "BREACH" && CRITICAL_REASON_CODES.includes(code);
   if (!isCritical) {
     return;
   }

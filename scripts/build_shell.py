@@ -48,6 +48,13 @@ CHECKPOINT = f'''
   </div>
 </div>
 <div class="status-banner" id="verdict" role="status">LOCKED · AUTHENTICATE TO BEGIN VERIFICATION</div>
+<div class="breach-active-banner" id="breach-session-banner" hidden>
+  <div class="banner-text">
+    <strong>PREVIOUS BREACH SESSION ACTIVE</strong>
+    <span>Previous breach session is still active. Reset checkpoint before new verification.</span>
+  </div>
+  <button type="button" class="primary" id="btn-banner-reset-checkpoint">RESET CHECKPOINT</button>
+</div>
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / LIVE BIOMETRIC FEED</h2><span class="badge" id="feed-state">STANDBY</span></div>
 {camera()}
 <div class="camera-controls-bar" id="camera-controls-bar">

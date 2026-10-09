@@ -89,7 +89,17 @@ evaluateSecurityEvent({
 assert.strictEqual(getActiveAlert(), null, "Recognized and live face should not create alert");
 assert.strictEqual(getCriticalEvents().length, 0);
 
-console.log("✓ Part 6 non-alarm conditions passed");
+// Part B & F: ZT-007 must NEVER trigger alert
+evaluateSecurityEvent({ state: "WAITING", reason_code: "ZT-007", reason: "Primary identity verified" });
+assert.strictEqual(getActiveAlert(), null, "ZT-007 should not create alert");
+assert.strictEqual(getCriticalEvents().length, 0);
+
+// Part C & F: latched_terminal must NEVER trigger alert popup
+evaluateSecurityEvent({ state: "BREACH", latched_terminal: true, reason: "Previous breach session active" });
+assert.strictEqual(getActiveAlert(), null, "latched_terminal should not create alert");
+assert.strictEqual(getCriticalEvents().length, 0);
+
+console.log("✓ Part 6 non-alarm conditions passed (including ZT-007 and latched_terminal)");
 
 
 // PART 5 & Item 11: Same breach result scanned 20 times -> exactly ONE modal/event

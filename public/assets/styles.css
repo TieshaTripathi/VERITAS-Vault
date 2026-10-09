@@ -1750,3 +1750,29 @@ a.button:hover {
   margin-top: 12px;
 }
 
+.breach-active-banner {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid var(--red, #ef4444);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 10px 0 14px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.breach-active-banner strong {
+  color: var(--red, #ef4444);
+  display: block;
+  font-family: 'Share Tech Mono', Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+
+.breach-active-banner span {
+  color: #fca5a5;
+  font-size: 12px;
+}
+

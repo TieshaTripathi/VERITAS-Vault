@@ -44,6 +44,20 @@ let trackCounter = 1;
 let tracks = [];
 // Prevents double-entry while async startCamera() is in flight
 let cameraStarting = false;
+let displayedBreachEventId = null;
+
+export function showBreachOnce(alert) {
+  if (!alert || !alert.id) return;
+  if (alert.id === displayedBreachEventId) return;
+
+  displayedBreachEventId = alert.id;
+  const modal = $("#breach-modal");
+  if (modal && typeof modal.showModal === "function" && !modal.open) {
+    try {
+      modal.showModal();
+    } catch {}
+  }
+}
 
 const video = $("#camera");
 const canvas = $("#hud-overlay");
@@ -362,14 +376,28 @@ function display(result) {
 
   const remaining = Math.max(0, (end - performance.now()) / 1000);
   const remText = remaining.toFixed(1) + "s remaining";
-  $("#verdict").textContent =
-    state === "GRANTED"
-      ? "UNLOCKED · DUAL CUSTODY VERIFIED"
-      : state === "WAITING"
-        ? (result.duplicate_first_party
-            ? `ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON\n${remText}`
-            : `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`)
-        : state + " · " + result.reason;
+  const currentFacesAllValid = Array.isArray(result.faces) && result.faces.length > 0 && result.faces.every(f => f.is_recognized && f.is_live);
+  const isLatchedBreach = state === "BREACH" && (result.latched_terminal || currentFacesAllValid);
+  const banner = $("#breach-session-banner");
+
+  if (isLatchedBreach) {
+    if (banner) banner.hidden = false;
+    $("#verdict").textContent = "PREVIOUS BREACH SESSION ACTIVE\nReset checkpoint to begin a new verification.";
+    if (hud) hud.textContent = "PREVIOUS BREACH ACTIVE · RESET REQUIRED";
+  } else if (state === "BREACH") {
+    if (banner) banner.hidden = true;
+    $("#verdict").textContent = state + " · " + result.reason;
+  } else {
+    if (banner) banner.hidden = true;
+    $("#verdict").textContent =
+      state === "GRANTED"
+        ? "UNLOCKED · DUAL CUSTODY VERIFIED"
+        : state === "WAITING"
+          ? (result.duplicate_first_party
+              ? `ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON\n${remText}`
+              : `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`)
+          : state + " · " + result.reason;
+  }
 
   if (state === "WAITING" && result.duplicate_first_party && hud) {
     hud.textContent = "ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON";
@@ -652,12 +680,8 @@ function updateAlertCenterUI() {
       if (bmBtnReset) {
         bmBtnReset.hidden = !alert.acknowledged;
       }
-
-      if (!alert.acknowledged && !modal.open && typeof modal.showModal === "function") {
-        try {
-          modal.showModal();
-        } catch {}
-      }
+      // Note: modal.showModal() is intentionally NOT called here.
+      // Modals are opened strictly once by showBreachOnce(alert) on a new unique breach event ID.
     }
   } else {
     if (alertCard) alertCard.hidden = true;
@@ -796,6 +820,28 @@ export async function beginSurveillance({ manual = false } = {}) {
 
     console.log("[VERITAS CAMERA] CAMERA_PLAYING");
     setStartupStatus("SCANNER RUNNING");
+
+    // Clean session check: query current checkpoint state before starting scanning
+    let currentCheck = null;
+    try {
+      currentCheck = await post("/checkpoint/tick");
+      display(currentCheck);
+    } catch {}
+
+    const sessionBanner = $("#breach-session-banner");
+    if (currentCheck && currentCheck.state === "BREACH") {
+      if (sessionBanner) sessionBanner.hidden = false;
+      const scannerStatusEl = $("#scanner-status");
+      if (scannerStatusEl) {
+        scannerStatusEl.textContent = "PAUSED (AWAITING RESET)";
+        scannerStatusEl.style.color = "var(--amber, #f59e0b)";
+      }
+      setStartupStatus("MONITORING (RESET REQUIRED)");
+      $("#verdict").textContent = "PREVIOUS BREACH SESSION ACTIVE\nReset checkpoint to begin a new verification.";
+      return;
+    } else {
+      if (sessionBanner) sessionBanner.hidden = true;
+    }
 
     clearInterval(loop);
     loop = setInterval(scan, 800);
@@ -944,12 +990,15 @@ $("#start-camera")?.addEventListener("click", () =>
 $("#stop-camera")?.addEventListener("click", onStopCamera);
 
 async function resetCheckpoint() {
+  displayedBreachEventId = null;
   clearActiveAlert();
   manuallyStopped = false;
   const modal = $("#breach-modal");
   if (modal && modal.open) {
     try { modal.close(); } catch {}
   }
+  const banner = $("#breach-session-banner");
+  if (banner) banner.hidden = true;
   const res = await post("/checkpoint/reset", { mode: $("#mode").value });
   display(res);
   toast("Checkpoint reset to STANDBY");
@@ -972,6 +1021,10 @@ $("#btn-ac-reset-checkpoint")?.addEventListener("click", () =>
 
 $("#bm-btn-reset")?.addEventListener("click", () =>
   action($("#bm-btn-reset"), resetCheckpoint)
+);
+
+$("#btn-banner-reset-checkpoint")?.addEventListener("click", () =>
+  action($("#btn-banner-reset-checkpoint"), resetCheckpoint)
 );
 
 $("#btn-ack-alert")?.addEventListener("click", () => {
@@ -1062,8 +1115,11 @@ document.addEventListener("vault-alarm-state", () => {
   updateAlertCenterUI();
 });
 
-document.addEventListener("vault-critical-alert", () => {
+document.addEventListener("vault-critical-alert", (e) => {
   updateAlertCenterUI();
+  if (e.detail) {
+    showBreachOnce(e.detail);
+  }
 });
 
 document.addEventListener("vault-alert-acknowledged", () => {

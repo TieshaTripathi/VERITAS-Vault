@@ -9,6 +9,7 @@ import os
 import secrets
 import sqlite3
 import time
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -497,11 +498,15 @@ def transition(faces=None, evidence=None, key="checkpoint:main"):
     raise HTTPException(409, "Another operator updated the checkpoint; retry")
 
 
-async def finish_window(deadline):
-    # ASGI BackgroundTasks are awaited by the request lifecycle, not detached threads.
-    await asyncio.sleep(max(0.0, min(WINDOW_SECONDS, deadline - time.time())))
-    await run_in_threadpool(transition)
-    await run_in_threadpool(drain_outbox)
+def finish_window(deadline):
+    delay = max(0.0, min(WINDOW_SECONDS, deadline - time.time()))
+    if delay > 0:
+        time.sleep(delay)
+    store = Store()
+    st, _ = store.get("checkpoint:main")
+    if st and st.get("state") == "WAITING" and st.get("deadline") == deadline:
+        transition()
+        drain_outbox()
 
 
 async def auto_relock_after_grant(delay_seconds: float = 4.0):
@@ -578,13 +583,15 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
     # Return terminal verdict while including live faces and quality for continuous HUD overlay
     if current and current.get("state") in ("GRANTED", "BREACH", "DENIED"):
         res = dict(current)
-        res.update(faces=faces, quality=quality_report, frame_size=frame_size)
+        res.update(faces=faces, quality=quality_report, frame_size=frame_size, latched_terminal=True)
         active_inc, _ = store.get("incident:active")
         if active_inc and any(not f.get("is_recognized") or not f.get("is_live") for f in faces):
             active_inc["last_seen"] = now
             store.put("incident:active", active_inc)
         res["active_incident"] = active_inc.get("id") if (active_inc and current.get("state") == "BREACH") else (current.get("last_event") or "NONE")
         res["incident_code"] = current.get("reason_code") or "NONE"
+        if faces and all(f.get("is_recognized") and f.get("is_live") for f in faces):
+            res["safe_user_message"] = "PREVIOUS BREACH SESSION ACTIVE: Reset checkpoint before new verification"
         return res
 
     # Anti-replay capture validation if session challenge was provided
@@ -680,7 +687,7 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
             result["remaining"] = max(0.0, result["deadline"] - now)
 
     if result["state"] == "WAITING":
-        background.add_task(finish_window, result["deadline"])
+        threading.Thread(target=finish_window, args=(result["deadline"],), daemon=True).start()
     elif terminal:
         background.add_task(drain_outbox)
     return result
@@ -715,6 +722,10 @@ def tick(background: BackgroundTasks, user=Depends(operator)):
     active_inc, _ = store.get("incident:active")
     result["active_incident"] = active_inc.get("id") if (active_inc and result.get("state") == "BREACH") else (result.get("last_event") or "NONE")
     result["incident_code"] = result.get("reason_code") or "NONE"
+    if result.get("state") in ("GRANTED", "BREACH", "DENIED"):
+        result["latched_terminal"] = True
+        if result.get("state") == "BREACH":
+            result["safe_user_message"] = "PREVIOUS BREACH SESSION ACTIVE: Reset checkpoint before new verification"
     now = time.time()
     if result.get("state") == "WAITING" and result.get("parties"):
         first_p = result["parties"][0]
