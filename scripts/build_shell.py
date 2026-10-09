@@ -31,35 +31,13 @@ def camera(enrollment=False):
 
 
 CHECKPOINT = f'''
-<div class="critical-alert-card" id="critical-alert-card" hidden role="alert">
-  <div class="critical-alert-content">
-    <div class="alert-icon">⚠️</div>
-    <div class="alert-details">
-      <div class="alert-header">
-        <strong id="alert-code">SECURITY BREACH · ACCESS DENIED</strong>
-        <span id="alert-time" class="alert-time"></span>
-      </div>
-      <p id="alert-message">UNREGISTERED IDENTITY DETECTED · EVIDENCE CAPTURED · ACCESS LOCKED</p>
-    </div>
-  </div>
-  <div class="alert-actions">
-    <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
-    <button type="button" id="btn-reset-alert" class="reset-btn" hidden>RESET CHECKPOINT</button>
-  </div>
-</div>
 <div class="status-banner" id="verdict" role="status">LOCKED · AUTHENTICATE TO BEGIN VERIFICATION</div>
-<div class="breach-active-banner" id="breach-session-banner" hidden>
-  <div class="banner-text">
-    <strong>PREVIOUS BREACH SESSION ACTIVE</strong>
-    <span>Previous breach session is still active. Reset checkpoint before new verification.</span>
-  </div>
-  <button type="button" class="primary" id="btn-banner-reset-checkpoint">RESET CHECKPOINT</button>
-</div>
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / LIVE BIOMETRIC FEED</h2><span class="badge" id="feed-state">STANDBY</span></div>
 {camera()}
 <div class="camera-controls-bar" id="camera-controls-bar">
   <button type="button" class="primary" id="start-camera">START CAMERA</button>
   <button type="button" class="quiet" id="stop-camera" disabled>STOP CAMERA</button>
+  <button type="button" class="quiet" id="btn-checkpoint-reset">RESET CHECKPOINT</button>
 </div>
 <div class="camera-fallback" id="camera-fallback-bar" hidden>
   <span id="camera-prompt-text">CAMERA PERMISSION REQUIRED</span>
@@ -67,12 +45,9 @@ CHECKPOINT = f'''
 <div class="telemetry">
   <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div>
   <div class="stat"><span class="stat-label">SCANNER</span><strong id="scanner-status">STANDBY</strong></div>
-  <div class="stat"><span class="stat-label">DETECTED</span><strong id="face-count">0</strong></div>
   <div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">NO FACE</strong></div>
-  <div class="stat"><span class="stat-label">ACCESS STATE</span><strong id="lock-state">LOCKED</strong></div>
   <div class="stat"><span class="stat-label">TELEGRAM</span><strong id="telegram-status">READY</strong></div>
   <div class="stat"><span class="stat-label">ALARM</span><strong id="alarm-status">SILENT</strong></div>
-  <div class="stat"><span class="stat-label">ACTIVE INCIDENT</span><strong id="incident-status">NONE</strong></div>
 </div>
 <details class="diagnostics-panel" id="diagnostics-panel">
   <summary class="diagnostics-summary">⚙ ADVANCED / DIAGNOSTICS</summary>
@@ -92,54 +67,33 @@ CHECKPOINT = f'''
 <div class="waiting-instruction-card" id="waiting-instruction-card" hidden>
   <div class="waiting-header"><span class="step-badge">STEP 1 COMPLETE</span><strong id="waiting-primary-name" style="color:var(--amber,#f59e0b)">PRIMARY VERIFIED</strong></div>
   <div class="waiting-action">
-    <strong>NOW SCAN SECOND PERSON</strong>
-    <p>Move first person out of frame.<br>Second authorized person must appear within 15s.</p>
-  </div>
-  <div class="telemetry waiting-telemetry">
-    <div class="stat"><span class="stat-label">FIRST PARTY</span><strong id="tel-first-party">—</strong></div>
-    <div class="stat"><span class="stat-label">CURRENT FACE</span><strong id="tel-current-face">—</strong></div>
-    <div class="stat"><span class="stat-label">DISTINCT</span><strong id="tel-distinct">—</strong></div>
-    <div class="stat"><span class="stat-label">REMAINING</span><strong id="tel-remaining">—</strong></div>
+    <strong>PERSON 1 VERIFIED · MOVE OUT OF CAMERA · SCAN SECOND PERSON</strong>
+    <p id="waiting-action-text">Second authorized person must appear within window.</p>
   </div>
 </div>
 <div class="party" id="party-0"><div class="avatar">1</div><div><strong>Awaiting identity</strong><small>Primary officer / customer</small></div></div>
 <div class="party" id="party-1"><div class="avatar">2</div><div><strong>Awaiting identity</strong><small>Second distinct party</small></div></div>
 <div class="timer-panel">{dial()}<div><span class="eyebrow">TEMPORAL WINDOW</span><h3 id="timer-title">Ready to verify</h3><p id="deadline-note">The first verified identity starts the 15-second server-enforced clock.</p></div></div>
-<div class="rules"><div class="rule"><span>01</span> Two distinct enrolled identities</div><div class="rule"><span>02</span> NCC ≥ 0.82 · Laplacian ≥ 60.0</div><div class="rule"><span>03</span> SHA-256 notarization · AES-256-GCM</div></div></section>
-<section class="panel" id="alert-center-panel"><div class="panel-head"><h2 class="section-label">03 / ALERT CENTER</h2><span class="badge" id="alert-center-badge">STANDBY</span></div>
-<div class="alert-center-box" id="alert-center-standby">
-  <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Alarm Sound</span><strong id="alarm-state-indicator" class="field-val">SILENT</strong></div>
-    <div class="alert-field"><span class="field-label">Telegram Channel</span><strong id="telegram-status-indicator" class="field-val">READY</strong></div>
-  </div>
-  <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Surveillance State</span><strong id="ac-surveillance-status" class="field-val" style="color:var(--green)">AUTOMATIC</strong></div>
-    <div class="alert-field"><span class="field-label">Incident Tracking</span><strong id="ac-incident-status" class="field-val">MONITORING</strong></div>
+<div class="rules"><div class="rule"><span>01</span> Two distinct enrolled identities</div><div class="rule"><span>02</span> NCC ≥ 0.82 · Laplacian ≥ 60.0</div><div class="rule"><span>03</span> SHA-256 notarization · AES-256-GCM</div></div>
+<div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px;">
+  <label for="mode">Required custody combination</label>
+  <div style="display:flex;gap:10px;margin-top:6px;">
+    <select id="mode" style="margin-top:0;">
+      <option value="standard">Employee + Customer</option>
+      <option value="high-value">Two distinct Employees</option>
+    </select>
+    <button type="button" id="reset" class="quiet" style="white-space:nowrap;">Reset / apply protocol</button>
   </div>
 </div>
-<div class="alert-center-box breach-box" id="alert-center-breach" hidden>
-  <div class="alert-breach-header">
-    <strong id="ac-breach-title">ZT-001 · UNKNOWN IDENTITY</strong>
-    <span id="ac-breach-time" class="field-time"></span>
-  </div>
-  <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Alarm</span><strong id="ac-breach-alarm" class="field-val alarm-sounding">SOUNDING</strong></div>
-    <div class="alert-field"><span class="field-label">Telegram Photo</span><strong id="ac-breach-telegram" class="field-val telegram-tag">DISPATCHED</strong></div>
-    <div class="alert-field"><span class="field-label">Evidence</span><strong id="ac-breach-evidence" class="field-val evidence-tag">CAPTURED</strong></div>
-  </div>
-  <div class="alert-center-actions">
-    <a href="/audit" id="btn-ac-view-evidence" class="ac-btn view-ev-btn">VIEW EVIDENCE 👁</a>
-    <button type="button" id="btn-ack-alert-center" class="ack-btn">ACKNOWLEDGE ALERT</button>
-    <button type="button" id="btn-ac-reset-checkpoint" class="ac-btn reset-btn" hidden>RESET CHECKPOINT</button>
-  </div>
-</div></section>
+</section>
+</div></div>
 <dialog id="breach-modal" class="breach-modal" role="alertdialog" aria-modal="true" aria-labelledby="bm-title">
   <div class="bm-card">
     <div class="bm-header">
       <span class="bm-icon" aria-hidden="true">⚠️</span>
       <h2 id="bm-title" class="bm-title">SECURITY BREACH</h2>
       <p class="bm-subtitle" id="bm-subtitle">UNAUTHORIZED PERSON DETECTED</p>
-      <div class="bm-denied-badge">ACCESS DENIED</div>
+      <div class="bm-denied-badge" id="bm-code">ZT-001 · ACCESS DENIED</div>
     </div>
     <div class="bm-body">
       <div class="bm-meta-row">
@@ -162,7 +116,7 @@ CHECKPOINT = f'''
     </div>
   </div>
 </dialog>
-<section class="panel"><div class="panel-head"><h2>Access protocol</h2><span class="badge">ZERO TRUST</span></div><label for="mode">Required custody combination</label><select id="mode"><option value="standard">Employee + Customer</option><option value="high-value">Two distinct Employees</option></select><div class="form-actions"><button id="reset">Reset / apply protocol</button></div><small class="callout" style="display:block;margin-top:8px;">Zero-Trust policy enforcement · Continuous biometric evaluation</small></section></div></div>'''
+'''
 
 ENROLLMENT = f'''
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / IDENTITY CAPTURE</h2><span class="badge">ADMIN ONLY</span></div>{camera(True)}

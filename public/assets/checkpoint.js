@@ -18,46 +18,37 @@ import {
   isAlarmActive,
   isMuted,
   setMuted,
-  areNotificationsEnabled,
-  requestNotificationPermission,
   evaluateSecurityEvent,
   getActiveAlert,
   clearActiveAlert,
-  subscribePush,
-  getPushSubscription,
   testSiren,
-  testPush,
   testTelegram,
   getAlertsStatus,
+  CRITICAL_REASON_CODES,
 } from "./alerts.js";
 
+// Scanner runtime constants & state
+const SCAN_INTERVAL = 1200; // 1200ms recognition interval for optimal performance
 let stopCamera = null;
 let loop = null;
-let busy = false;
+let busy = false; // Strict scan lock: only one recognition request at a time
 let state = "STANDBY";
 let end = 0;
-let polling = false;
 let revision = -1;
 let manuallyStopped = false;
 let animFrameId = null;
 let trackCounter = 1;
 let tracks = [];
-// Prevents double-entry while async startCamera() is in flight
 let cameraStarting = false;
-let displayedBreachEventId = null;
 
-export function showBreachOnce(alert) {
-  if (!alert || !alert.id) return;
-  if (alert.id === displayedBreachEventId) return;
+// Anti-replay session caching (Phase 5)
+let activeSession = null;
+let activeSessionExpiresAt = 0;
+let frameSequence = 0;
 
-  displayedBreachEventId = alert.id;
-  const modal = $("#breach-modal");
-  if (modal && typeof modal.showModal === "function" && !modal.open) {
-    try {
-      modal.showModal();
-    } catch {}
-  }
-}
+// Single breach popup tracking (Phase 8: one event ID -> one modal)
+const shownEventIds = new Set();
+let telegramConfigured = false;
 
 const video = $("#camera");
 const canvas = $("#hud-overlay");
@@ -87,28 +78,31 @@ function setStartupStatus(statusText, isError = false) {
   if (feedState && state === "STANDBY" && !isError) {
     feedState.textContent = statusText;
   }
-  const camStatusEl = $("#camera-status");
-  const scannerStatusEl = $("#scanner-status");
+  updateTelemetry();
+}
 
-  if (statusText === "AUTHENTICATED") {
-    if (camStatusEl) { camStatusEl.textContent = "STANDBY"; camStatusEl.style.color = "#91a5bc"; }
-    if (scannerStatusEl) { scannerStatusEl.textContent = "WAITING"; scannerStatusEl.style.color = "#91a5bc"; }
-  } else if (statusText === "CAMERA INITIALIZING") {
-    if (camStatusEl) { camStatusEl.textContent = "INITIALIZING"; camStatusEl.style.color = "var(--cyan)"; }
-    if (scannerStatusEl) { scannerStatusEl.textContent = "WAITING"; scannerStatusEl.style.color = "#91a5bc"; }
-  } else if (statusText === "CAMERA ACTIVE") {
-    if (camStatusEl) { camStatusEl.textContent = "ACTIVE"; camStatusEl.style.color = "var(--green)"; }
-    if (scannerStatusEl) { scannerStatusEl.textContent = "INITIALIZING"; scannerStatusEl.style.color = "var(--cyan)"; }
-  } else if (statusText === "SCANNER RUNNING" || statusText === "MONITORING") {
-    if (camStatusEl) { camStatusEl.textContent = "ACTIVE"; camStatusEl.style.color = "var(--green)"; }
-    if (scannerStatusEl) { scannerStatusEl.textContent = "RUNNING"; scannerStatusEl.style.color = "var(--green)"; }
-  } else if (statusText === "CAMERA BLOCKED" || statusText === "CAMERA PERMISSION REQUIRED") {
-    if (camStatusEl) { camStatusEl.textContent = "BLOCKED"; camStatusEl.style.color = "var(--red)"; }
-    if (scannerStatusEl) { scannerStatusEl.textContent = "PAUSED"; scannerStatusEl.style.color = "#91a5bc"; }
-  } else if (statusText === "BACKEND OFFLINE") {
-    if (scannerStatusEl) { scannerStatusEl.textContent = "OFFLINE"; scannerStatusEl.style.color = "var(--red)"; }
-  } else if (statusText === "SCANNER ERROR") {
-    if (scannerStatusEl) { scannerStatusEl.textContent = "ERROR"; scannerStatusEl.style.color = "var(--red)"; }
+/* =========================================================
+   SESSION LIFECYCLE (PHASE 5: Reusable 45-60s Session)
+   ========================================================= */
+
+async function getOrRenewSession() {
+  const now = performance.now();
+  if (activeSession && now < activeSessionExpiresAt) {
+    return activeSession;
+  }
+  try {
+    activeSession = await post("/checkpoint/session", {
+      device_id: "DEV-PWA-01",
+      checkpoint_id: "CP-MAIN-01",
+    });
+    frameSequence = 0;
+    const ttlMs = Math.max(10, (activeSession.ttl_seconds || 60) - 5) * 1000;
+    activeSessionExpiresAt = now + ttlMs;
+    return activeSession;
+  } catch (e) {
+    console.warn("[SESSION] Capture session acquisition failed:", e.message);
+    activeSession = null;
+    return null;
   }
 }
 
@@ -135,7 +129,7 @@ function updateTracks(detectedFaces, frameSize) {
   const snapH = frameSize?.[1] || 480;
 
   for (const face of detectedFaces) {
-    const bbox = face.bbox; // [x, y, w, h] in snapshot coords
+    const bbox = face.bbox;
     let bestTrack = null;
     let bestScore = 0;
 
@@ -184,7 +178,6 @@ function updateTracks(detectedFaces, frameSize) {
     }
   }
 
-  // Prune lost tracks
   tracks = tracks.filter((track) => {
     if (!matchedTrackIds.has(track.trackId)) {
       track.missedFrames += 1;
@@ -236,7 +229,6 @@ function renderOverlay() {
   }
 
   for (const track of tracks) {
-    // Smooth linear interpolation for stable box movement
     for (let i = 0; i < 4; i++) {
       track.currentBbox[i] += (track.targetBbox[i] - track.currentBbox[i]) * 0.28;
     }
@@ -256,10 +248,7 @@ function renderOverlay() {
     let isWarning = false;
     let isBreach = false;
 
-    if (!track.is_live) {
-      statusColor = "#ef4444";
-      isBreach = true;
-    } else if (!track.is_recognized) {
+    if (!track.is_live || !track.is_recognized) {
       statusColor = "#ef4444";
       isBreach = true;
     } else if (state === "WAITING") {
@@ -270,8 +259,6 @@ function renderOverlay() {
     }
 
     ctx.save();
-
-    // Box tint
     ctx.fillStyle = isBreach
       ? "rgba(239, 68, 68, 0.10)"
       : isWarning
@@ -279,7 +266,6 @@ function renderOverlay() {
         : "rgba(0, 240, 255, 0.08)";
     ctx.fillRect(x, y, w, h);
 
-    // Box corner brackets
     ctx.strokeStyle = statusColor;
     ctx.lineWidth = 2;
     const corner = Math.min(22, Math.min(w, h) * 0.3);
@@ -290,7 +276,6 @@ function renderOverlay() {
     ctx.moveTo(x + corner, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - corner);
     ctx.stroke();
 
-    // Label construction
     ctx.font = "bold 11px 'Share Tech Mono', Consolas, monospace";
     let line1 = "";
     let line2 = "";
@@ -313,19 +298,14 @@ function renderOverlay() {
     const tagX = Math.max(6, Math.min(cWidth - tagW - 6, x));
     const tagY = y > tagH + 8 ? y - tagH - 6 : y + h + 6;
 
-    // Tag background
     ctx.fillStyle = "rgba(6, 13, 22, 0.92)";
     ctx.fillRect(tagX, tagY, tagW, tagH);
     ctx.strokeStyle = statusColor;
     ctx.lineWidth = 1;
     ctx.strokeRect(tagX, tagY, tagW, tagH);
 
-    // Status indicator stripe
     ctx.fillStyle = statusColor;
     ctx.fillRect(tagX, tagY, 3, tagH);
-
-    // Render lines
-    ctx.fillStyle = statusColor;
     ctx.fillText(line1, tagX + 8, tagY + 14);
 
     ctx.font = "10px 'Share Tech Mono', Consolas, monospace";
@@ -347,16 +327,22 @@ function display(result) {
   if (hud) {
     if (result.state === "GRANTED") hud.textContent = "ACCESS GRANTED · UNLOCKED";
     else if (result.state === "BREACH") hud.textContent = "SECURITY BREACH · ACCESS DENIED";
-    else if (result.faces && result.faces.length > 0) hud.textContent = "HOLD STILL — FIXATING...";
-    else hud.textContent = "MONITORING · SCANNING FOR FACE";
+    else if (result.state === "WAITING") {
+      hud.textContent = result.duplicate_first_party
+        ? "ALREADY VERIFIED — PLEASE SCAN DIFFERENT PERSON"
+        : "STEP 1 COMPLETE · MOVE OUT OF CAMERA";
+    } else if (result.faces && result.faces.length > 0) {
+      hud.textContent = "FACE DETECTED · VERIFYING...";
+    } else {
+      hud.textContent = "MONITORING · SCANNING FOR FACE";
+    }
   }
 
-  // Feed detection updates to face tracking overlay
   if (Array.isArray(result.faces)) {
     updateTracks(result.faces, result.frame_size);
   }
 
-  // Security severity and alarm processing
+  // Security severity and alarm processing (Phase 8: single breach modal)
   evaluateSecurityEvent(result);
 
   if (result.revision !== undefined && result.revision < revision) return;
@@ -376,31 +362,20 @@ function display(result) {
 
   const remaining = Math.max(0, (end - performance.now()) / 1000);
   const remText = remaining.toFixed(1) + "s remaining";
-  const currentFacesAllValid = Array.isArray(result.faces) && result.faces.length > 0 && result.faces.every(f => f.is_recognized && f.is_live);
-  const isLatchedBreach = state === "BREACH" && (result.latched_terminal || currentFacesAllValid);
-  const banner = $("#breach-session-banner");
 
-  if (isLatchedBreach) {
-    if (banner) banner.hidden = false;
-    $("#verdict").textContent = "PREVIOUS BREACH SESSION ACTIVE\nReset checkpoint to begin a new verification.";
-    if (hud) hud.textContent = "PREVIOUS BREACH ACTIVE · RESET REQUIRED";
-  } else if (state === "BREACH") {
-    if (banner) banner.hidden = true;
-    $("#verdict").textContent = state + " · " + result.reason;
-  } else {
-    if (banner) banner.hidden = true;
-    $("#verdict").textContent =
-      state === "GRANTED"
-        ? "UNLOCKED · DUAL CUSTODY VERIFIED"
-        : state === "WAITING"
-          ? (result.duplicate_first_party
-              ? `ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON\n${remText}`
-              : `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`)
-          : state + " · " + result.reason;
-  }
-
-  if (state === "WAITING" && result.duplicate_first_party && hud) {
-    hud.textContent = "ALREADY VERIFIED — WAITING FOR DIFFERENT PERSON";
+  const verdictEl = $("#verdict");
+  if (verdictEl) {
+    if (state === "GRANTED") {
+      verdictEl.textContent = "UNLOCKED · DUAL CUSTODY VERIFIED";
+    } else if (state === "WAITING") {
+      verdictEl.textContent = result.duplicate_first_party
+        ? `ALREADY VERIFIED — PLEASE SCAN DIFFERENT PERSON\n${remText}`
+        : `PERSON 1 VERIFIED · MOVE OUT OF CAMERA · SCAN SECOND PERSON\n${remText}`;
+    } else if (state === "BREACH") {
+      verdictEl.textContent = `BREACH · ${result.reason || "ACCESS DENIED"}`;
+    } else {
+      verdictEl.textContent = "STANDBY · AUTHENTICATE TO BEGIN VERIFICATION";
+    }
   }
 
   const waitCard = $("#waiting-instruction-card");
@@ -408,50 +383,25 @@ function display(result) {
     if (state === "WAITING") {
       waitCard.hidden = false;
       const primary = result.parties?.[0];
-      const pName = primary?.name || primary?.id || "Authorized Officer";
+      const pName = primary?.name || primary?.id || "Primary Officer";
       const wPrimary = $("#waiting-primary-name");
-      if (wPrimary) wPrimary.textContent = `<${pName}> verified`;
-
-      const tFirst = $("#tel-first-party");
-      if (tFirst) tFirst.textContent = result.first_party || (primary ? `${primary.id} / ${primary.name}` : "—");
-
-      const tFace = $("#tel-current-face");
-      if (tFace) {
-        if (result.current_face) {
-          tFace.textContent = result.current_face;
-        } else if (result.faces && result.faces.length > 0) {
-          const f = result.faces[0];
-          tFace.textContent = `${f.id || "unknown"} / ${f.name || "Unknown individual"}`;
-        } else {
-          tFace.textContent = "NONE (FRAME EMPTY)";
-        }
+      if (wPrimary) wPrimary.textContent = `${pName.toUpperCase()} VERIFIED`;
+      const wText = $("#waiting-action-text");
+      if (wText) {
+        wText.textContent = result.duplicate_first_party
+          ? "Please step aside so a different authorized person can scan."
+          : `Second authorized person must appear within ${remText}.`;
       }
-
-      const tDistinct = $("#tel-distinct");
-      if (tDistinct) {
-        if (result.distinct_face) {
-          tDistinct.textContent = result.distinct_face;
-        } else if (result.duplicate_first_party) {
-          tDistinct.textContent = "NO";
-        } else if (result.faces && result.faces.length > 0) {
-          const f = result.faces[0];
-          tDistinct.textContent = (primary && f.id === primary.id) ? "NO" : (f.is_recognized ? "YES" : "UNKNOWN");
-        } else {
-          tDistinct.textContent = "WAITING";
-        }
-      }
-
-      const tRem = $("#tel-remaining");
-      if (tRem) tRem.textContent = remText;
     } else {
       waitCard.hidden = true;
     }
   }
 
-  $("#feed-state").textContent = state;
-  $("#mode").value = result.mode;
-  $("#lock-state").textContent = state === "GRANTED" ? "UNLOCKED" : state;
-  $("#face-count").textContent = Array.isArray(result.faces) ? String(result.faces.length) : (result.parties?.length ? String(result.parties.length) : "0");
+  const feedState = $("#feed-state");
+  if (feedState) feedState.textContent = state;
+
+  const modeEl = $("#mode");
+  if (modeEl && result.mode) modeEl.value = result.mode;
 
   const livenessEl = $("#liveness");
   if (livenessEl) {
@@ -464,76 +414,52 @@ function display(result) {
     }
   }
 
-  // Incident status telemetry
-  const incidentEl = $("#incident-status");
-  if (incidentEl) {
-    if (result.active_incident && result.active_incident !== "NONE") {
-      incidentEl.textContent = `${result.incident_code || "ZT-001"} · ACTIVE`;
-      incidentEl.style.color = "var(--red)";
-    } else if (state === "BREACH") {
-      incidentEl.textContent = `${result.reason_code || "ZT-001"} · ACTIVE`;
-      incidentEl.style.color = "var(--red)";
-    } else if (state === "WAITING") {
-      incidentEl.textContent = "ZT-007 · WAITING";
-      incidentEl.style.color = "var(--amber)";
-    } else {
-      incidentEl.textContent = "NONE";
-      incidentEl.style.color = "#91a5bc";
-    }
-  }
-
+  // Update verified parties display
   for (let i = 0; i < 2; i++) {
     const p = result.parties?.[i];
     const node = $("#party-" + i);
     if (node) {
       node.classList.toggle("verified", !!p);
-      $(".avatar", node).textContent = p ? "✓" : String(i + 1);
-      $("strong", node).textContent = p ? p.name : "Awaiting identity";
-      $("small", node).textContent = p
-        ? p.role
-        : i === 0
-          ? "Primary officer / customer"
-          : "Second distinct party";
+      const av = $(".avatar", node);
+      if (av) av.textContent = p ? "✓" : String(i + 1);
+      const str = $("strong", node);
+      if (str) str.textContent = p ? p.name : "Awaiting identity";
+      const sm = $("small", node);
+      if (sm) {
+        sm.textContent = p
+          ? p.role
+          : i === 0
+            ? "Primary officer / customer"
+            : "Second distinct party";
+      }
     }
   }
 
-  $("#timer-title").textContent =
-    state === "WAITING"
-      ? "PRIMARY VERIFIED"
-      : state === "GRANTED"
-        ? "Policy satisfied"
-        : state === "BREACH"
-          ? "Window closed"
-          : "Ready to verify";
+  const timerTitle = $("#timer-title");
+  if (timerTitle) {
+    timerTitle.textContent =
+      state === "WAITING"
+        ? "PRIMARY VERIFIED"
+        : state === "GRANTED"
+          ? "Policy satisfied"
+          : state === "BREACH"
+            ? "Window closed"
+            : "Ready to verify";
+  }
 
-  $("#deadline-note").textContent =
-    state === "WAITING"
-      ? `Awaiting second authorized party · ${remText}`
-      : "A new authorized scan starts the 15-second window.";
+  const deadlineNote = $("#deadline-note");
+  if (deadlineNote) {
+    deadlineNote.textContent =
+      state === "WAITING"
+        ? `Awaiting second authorized party · ${remText}`
+        : "The first verified identity starts the 15-second server-enforced clock.";
+  }
 
-  updateAlertCenterUI();
+  updateTelemetry();
 }
 
-let telegramConfigured = false;
-
-function updateAlertCenterUI() {
-  const alert = getActiveAlert();
-  const alertCard = $("#critical-alert-card");
-  const alertBadge = $("#alert-center-badge");
-  const standbyBox = $("#alert-center-standby");
-  const breachBox = $("#alert-center-breach");
-  const alarmIndicator = $("#alarm-state-indicator");
-  const alarmStatusEl = $("#alarm-status");
-  const ackBtn = $("#btn-ack-alert");
-  const ackCenterBtn = $("#btn-ack-alert-center");
+function updateTelemetry() {
   const camStatusEl = $("#camera-status");
-  const scannerStatusEl = $("#scanner-status");
-  const tgIndicator = $("#telegram-status-indicator");
-  const tgStatusEl = $("#telegram-status");
-  const acIncidentEl = $("#ac-incident-status");
-  const modal = $("#breach-modal");
-
-  // Camera telemetry status
   if (camStatusEl) {
     if (stopCamera) {
       camStatusEl.textContent = "ACTIVE";
@@ -550,7 +476,7 @@ function updateAlertCenterUI() {
     }
   }
 
-  // Scanner status
+  const scannerStatusEl = $("#scanner-status");
   if (scannerStatusEl) {
     if (stopCamera) {
       scannerStatusEl.textContent = busy ? "SCANNING" : "RUNNING";
@@ -564,147 +490,35 @@ function updateAlertCenterUI() {
     }
   }
 
-  // Alarm status telemetry
-  const alarmText = isAlarmActive()
-    ? "SOUNDING"
-    : alert?.acknowledged
-      ? "ACKNOWLEDGED"
-      : isMuted()
-        ? "MUTED"
-        : "SILENT";
-  const alarmColor = isAlarmActive()
-    ? "var(--red)"
-    : alert?.acknowledged
-      ? "var(--amber)"
-      : isMuted()
-        ? "var(--muted)"
-        : "#91a5bc";
-
-  if (alarmIndicator) {
-    alarmIndicator.textContent = alarmText;
-    alarmIndicator.style.color = alarmColor;
-  }
+  const alarmStatusEl = $("#alarm-status");
+  const alert = getActiveAlert();
   if (alarmStatusEl) {
+    const alarmText = isAlarmActive()
+      ? "SOUNDING"
+      : alert?.acknowledged
+        ? "ACKNOWLEDGED"
+        : isMuted()
+          ? "MUTED"
+          : "SILENT";
+    const alarmColor = isAlarmActive()
+      ? "var(--red)"
+      : alert?.acknowledged
+        ? "var(--amber)"
+        : isMuted()
+          ? "var(--muted)"
+          : "#91a5bc";
     alarmStatusEl.textContent = alarmText;
     alarmStatusEl.style.color = alarmColor;
   }
 
-  // Telegram bot status telemetry
-  getAlertsStatus()
-    .then((status) => {
-      telegramConfigured = Boolean(status?.telegram_configured);
-      const isBreach = alert && state === "BREACH";
-      const tgText = telegramConfigured
-        ? isBreach
-          ? "DISPATCHED"
-          : "READY"
-        : "NOT CONFIGURED";
-      const tgColor = telegramConfigured
-        ? isBreach
-          ? "var(--red)"
-          : "var(--green)"
-        : "#91a5bc";
-      if (tgIndicator) {
-        tgIndicator.textContent = telegramConfigured ? "CONFIGURED" : "NOT CONFIGURED";
-        tgIndicator.style.color = telegramConfigured ? "var(--green)" : "#91a5bc";
-      }
-      if (tgStatusEl) {
-        tgStatusEl.textContent = tgText;
-        tgStatusEl.style.color = tgColor;
-      }
-    })
-    .catch(() => {});
-
-  if (acIncidentEl) {
-    acIncidentEl.textContent = alert && state === "BREACH" ? `${alert.code || "ZT-001"} · ACTIVE` : "MONITORING";
-    acIncidentEl.style.color = alert && state === "BREACH" ? "var(--red)" : "var(--green)";
-  }
-
-  if (alert && state !== "GRANTED" && state !== "STANDBY") {
-    const evidenceUrlStr = `/audit?event=${encodeURIComponent(alert.id || "")}`;
-    if (alertCard) {
-      alertCard.hidden = false;
-      $("#alert-code").textContent = `${alert.title} · ${alert.code}`;
-      $("#alert-time").textContent = alert.timestamp;
-      $("#alert-message").textContent = `${(alert.reason || "").toUpperCase()} · EVIDENCE CAPTURED · ACCESS LOCKED`;
-      if (ackBtn) {
-        ackBtn.classList.toggle("acknowledged", !!alert.acknowledged);
-        ackBtn.textContent = alert.acknowledged ? "ACKNOWLEDGED ✓" : "ACKNOWLEDGE ALERT";
-      }
-      const resetCardBtn = $("#btn-reset-alert");
-      if (resetCardBtn) {
-        resetCardBtn.hidden = !alert.acknowledged;
-      }
-    }
-    if (standbyBox) standbyBox.hidden = true;
-    if (breachBox) {
-      breachBox.hidden = false;
-      if ($("#ac-breach-title")) $("#ac-breach-title").textContent = `${alert.code} · ${alert.title}`;
-      if ($("#ac-breach-time")) $("#ac-breach-time").textContent = alert.timestamp;
-      if ($("#ac-breach-alarm")) {
-        $("#ac-breach-alarm").textContent = isAlarmActive() ? "SOUNDING" : alert.acknowledged ? "ACKNOWLEDGED" : "SILENT";
-      }
-      if ($("#ac-breach-telegram")) $("#ac-breach-telegram").textContent = "DISPATCHED";
-      if ($("#ac-breach-push")) $("#ac-breach-push").textContent = "SENT";
-      if ($("#ac-breach-evidence")) $("#ac-breach-evidence").textContent = "CAPTURED";
-      const acViewEv = $("#btn-ac-view-evidence");
-      if (acViewEv) acViewEv.href = evidenceUrlStr;
-      const acResetBtn = $("#btn-ac-reset-checkpoint");
-      if (acResetBtn) {
-        acResetBtn.hidden = !alert.acknowledged;
-      }
-    }
-    if (alertBadge) {
-      alertBadge.textContent = "BREACH";
-      alertBadge.className = "badge BREACH";
-    }
-
-    // Populate and display In-App Breach Modal
-    if (modal) {
-      const bmSubtitle = $("#bm-subtitle");
-      if (bmSubtitle) bmSubtitle.textContent = alert.subtitle || "UNAUTHORIZED PERSON DETECTED";
-      const bmCheckpoint = $("#bm-checkpoint");
-      if (bmCheckpoint) bmCheckpoint.textContent = alert.checkpoint || "CP-MAIN-01";
-      const bmTime = $("#bm-time");
-      if (bmTime) bmTime.textContent = alert.timestamp || "—";
-      const bmEv = $("#bm-evidence");
-      if (bmEv) bmEv.textContent = alert.evidence || "CAPTURED";
-      const bmView = $("#bm-btn-view");
-      if (bmView) bmView.href = evidenceUrlStr;
-      const bmBtnAck = $("#bm-btn-ack");
-      if (bmBtnAck) {
-        bmBtnAck.classList.toggle("acknowledged", !!alert.acknowledged);
-        bmBtnAck.textContent = alert.acknowledged ? "ACKNOWLEDGED (SILENCED) ✓" : "ACKNOWLEDGE ALERT";
-      }
-      const bmBtnReset = $("#bm-btn-reset");
-      if (bmBtnReset) {
-        bmBtnReset.hidden = !alert.acknowledged;
-      }
-      // Note: modal.showModal() is intentionally NOT called here.
-      // Modals are opened strictly once by showBreachOnce(alert) on a new unique breach event ID.
-    }
-  } else {
-    if (alertCard) alertCard.hidden = true;
-    if ($("#btn-reset-alert")) $("#btn-reset-alert").hidden = true;
-    if (standbyBox) standbyBox.hidden = false;
-    if (breachBox) breachBox.hidden = true;
-    if ($("#btn-ac-reset-checkpoint")) $("#btn-ac-reset-checkpoint").hidden = true;
-    if ($("#bm-btn-reset")) $("#bm-btn-reset").hidden = true;
-    if (alertBadge) {
-      alertBadge.textContent = state === "WAITING" ? "STANDBY / WAITING" : "STANDBY";
-      alertBadge.className = "badge";
-    }
-    if (alarmIndicator) {
-      alarmIndicator.textContent = "SILENT";
-      alarmIndicator.style.color = "#91a5bc";
-    }
-    if (modal && modal.open) {
-      try { modal.close(); } catch {}
-    }
+  const tgStatusEl = $("#telegram-status");
+  if (tgStatusEl) {
+    const isBreach = alert && state === "BREACH";
+    tgStatusEl.textContent = isBreach ? "DISPATCHED" : telegramConfigured ? "READY" : "NOT CONFIGURED";
+    tgStatusEl.style.color = isBreach ? "var(--red)" : telegramConfigured ? "var(--green)" : "#91a5bc";
   }
 
   updateMuteButton();
-  updateNotifButton();
 }
 
 function updateMuteButton() {
@@ -716,38 +530,65 @@ function updateMuteButton() {
   }
 }
 
-function updateNotifButton() {
-  const phoneIndicator = $("#phone-push-indicator");
-  const phoneBtn = $("#btn-enable-phone");
-  getPushSubscription().then((sub) => {
-    if (phoneIndicator) {
-      phoneIndicator.textContent = sub ? "ACTIVE" : "NOT CONFIGURED";
-      phoneIndicator.style.color = sub ? "var(--green)" : "#91a5bc";
-    }
-    if (phoneBtn) {
-      phoneBtn.textContent = sub ? "PHONE ALERTS: ACTIVE" : "ENABLE PHONE ALERTS";
-      phoneBtn.style.color = sub ? "var(--green)" : "var(--muted)";
-    }
-  }).catch(() => {});
+/* =========================================================
+   POPUP SYSTEM (PHASE 8: Single modal, deduplicated)
+   ========================================================= */
+
+export function showBreachModal(alert) {
+  if (!alert || !alert.id) return;
+  if (shownEventIds.has(alert.id)) return;
+  shownEventIds.add(alert.id);
+
+  const modal = $("#breach-modal");
+  if (!modal || typeof modal.showModal !== "function") return;
+
+  const bmSubtitle = $("#bm-subtitle");
+  if (bmSubtitle) bmSubtitle.textContent = alert.subtitle || "UNAUTHORIZED PERSON DETECTED";
+
+  const bmCode = $("#bm-code");
+  if (bmCode) bmCode.textContent = `${alert.code || "ZT-001"} · ACCESS DENIED`;
+
+  const bmCheckpoint = $("#bm-checkpoint");
+  if (bmCheckpoint) bmCheckpoint.textContent = alert.checkpoint || "CP-MAIN-01";
+
+  const bmTime = $("#bm-time");
+  if (bmTime) bmTime.textContent = alert.timestamp || "—";
+
+  const bmEvidence = $("#bm-evidence");
+  if (bmEvidence) bmEvidence.textContent = alert.evidence || "CAPTURED";
+
+  const bmView = $("#bm-btn-view");
+  if (bmView) bmView.href = `/audit?event=${encodeURIComponent(alert.id)}`;
+
+  const bmBtnAck = $("#bm-btn-ack");
+  if (bmBtnAck) {
+    bmBtnAck.classList.toggle("acknowledged", !!alert.acknowledged);
+    bmBtnAck.textContent = alert.acknowledged ? "ACKNOWLEDGED ✓" : "ACKNOWLEDGE ALERT";
+  }
+
+  const bmBtnReset = $("#bm-btn-reset");
+  if (bmBtnReset) bmBtnReset.hidden = false;
+
+  if (!modal.open) {
+    try {
+      modal.showModal();
+    } catch {}
+  }
 }
 
 /* =========================================================
-   SURVEILLANCE & CAMERA ENGINE
+   SURVEILLANCE & CAMERA ENGINE (PHASE 4)
    ========================================================= */
 
 export async function beginSurveillance({ manual = false } = {}) {
   if (!currentUser) return;
-
-  // If stopped manually by operator (diagnostics), don't auto-restart unless requested
   if (manual) {
     manuallyStopped = false;
   } else if (manuallyStopped) {
     return;
   }
 
-  // Prevent double-entry while camera is already running or async start is in flight
   if (stopCamera || cameraStarting) return;
-
   if (!video) return;
 
   video.autoplay = true;
@@ -755,34 +596,21 @@ export async function beginSurveillance({ manual = false } = {}) {
   video.playsInline = true;
 
   const fallbackBar = $("#camera-fallback-bar");
-
-  // Query camera permission where supported
-  let permState = null;
   if (navigator.permissions?.query) {
     try {
       const perm = await navigator.permissions.query({ name: "camera" });
-      permState = perm.state;
       perm.onchange = () => {
         if (perm.state === "granted" && !stopCamera && currentUser) {
           if (fallbackBar) fallbackBar.hidden = true;
           beginSurveillance();
         }
       };
-
       if (perm.state === "denied") {
-        if (fallbackBar) {
-          fallbackBar.hidden = false;
-          const t = $(".camera-fallback-title", fallbackBar);
-          if (t) t.textContent = "CAMERA BLOCKED";
-          const h = $(".camera-fallback-hint", fallbackBar);
-          if (h) h.textContent = "Camera access is blocked in browser settings. Unblock to enable surveillance.";
-        }
+        if (fallbackBar) fallbackBar.hidden = false;
         setStartupStatus("CAMERA BLOCKED", true);
         return;
       }
-    } catch {
-      // Permissions API not available; continue to startCamera attempt
-    }
+    } catch {}
   }
 
   cameraStarting = true;
@@ -799,14 +627,10 @@ export async function beginSurveillance({ manual = false } = {}) {
     if ($("#stop-camera")) $("#stop-camera").disabled = false;
     if ($("#start-camera")) $("#start-camera").disabled = true;
 
-    const notice = $("#notice");
-    if (notice) notice.textContent = "";
-
     if (!animFrameId) {
       animFrameId = requestAnimationFrame(renderOverlay);
     }
 
-    // Wait until video has dimensions and is playing
     if (video.readyState < 2 || video.videoWidth === 0) {
       await new Promise((resolve) => {
         const onLoaded = () => {
@@ -821,64 +645,28 @@ export async function beginSurveillance({ manual = false } = {}) {
     console.log("[VERITAS CAMERA] CAMERA_PLAYING");
     setStartupStatus("SCANNER RUNNING");
 
-    // Clean session check: query current checkpoint state before starting scanning
-    let currentCheck = null;
-    try {
-      currentCheck = await post("/checkpoint/tick");
-      display(currentCheck);
-    } catch {}
-
-    const sessionBanner = $("#breach-session-banner");
-    if (currentCheck && currentCheck.state === "BREACH") {
-      if (sessionBanner) sessionBanner.hidden = false;
-      const scannerStatusEl = $("#scanner-status");
-      if (scannerStatusEl) {
-        scannerStatusEl.textContent = "PAUSED (AWAITING RESET)";
-        scannerStatusEl.style.color = "var(--amber, #f59e0b)";
-      }
-      setStartupStatus("MONITORING (RESET REQUIRED)");
-      $("#verdict").textContent = "PREVIOUS BREACH SESSION ACTIVE\nReset checkpoint to begin a new verification.";
-      return;
-    } else {
-      if (sessionBanner) sessionBanner.hidden = true;
-    }
+    // Establish reusable capture session challenge
+    await getOrRenewSession();
 
     clearInterval(loop);
-    loop = setInterval(scan, 800);
+    loop = setInterval(scan, SCAN_INTERVAL);
 
     // Initial immediate scan
     await scan();
-
     if (state === "STANDBY") {
       setStartupStatus("MONITORING");
     }
   } catch (err) {
-    console.warn("[VERITAS CAMERA] CAMERA_INIT_FAILED:", err.name, err.message);
+    console.warn("[VERITAS CAMERA] CAMERA_INIT_FAILED", err.message);
     stopCamera = null;
     const isPermission =
       err.name === "NotAllowedError" ||
       err.name === "PermissionDeniedError" ||
       err.name === "SecurityError";
 
-    if (fallbackBar) {
-      fallbackBar.hidden = false;
-      const t = $(".camera-fallback-title", fallbackBar);
-      if (t) t.textContent = isPermission ? "CAMERA PERMISSION REQUIRED" : "CAMERA INITIALIZATION FAILED";
-      const h = $(".camera-fallback-hint", fallbackBar);
-      if (h) h.textContent = isPermission
-        ? "Grant camera permission once to enable automated checkpoint surveillance"
-        : (err.message || "Click START CAMERA to retry connection");
-    }
-
-    if (isPermission) {
-      setStartupStatus("CAMERA PERMISSION REQUIRED", true);
-    } else {
-      setStartupStatus("CAMERA BLOCKED", true);
-    }
-
-    if (manual) {
-      toast(err.message || "Failed to start camera.");
-    }
+    if (fallbackBar) fallbackBar.hidden = false;
+    setStartupStatus(isPermission ? "CAMERA PERMISSION REQUIRED" : "CAMERA BLOCKED", true);
+    if (manual) toast(err.message || "Failed to start camera.");
   } finally {
     cameraStarting = false;
   }
@@ -905,57 +693,57 @@ function stop() {
   if ($("#start-camera")) $("#start-camera").disabled = false;
   if ($("#stop-camera")) $("#stop-camera").disabled = true;
 
-  const camStatusEl = $("#camera-status");
-  const scannerStatusEl = $("#scanner-status");
-  if (camStatusEl) {
-    camStatusEl.textContent = "STOPPED";
-    camStatusEl.style.color = "var(--amber, #f59e0b)";
-  }
-  if (scannerStatusEl) {
-    scannerStatusEl.textContent = "PAUSED";
-    scannerStatusEl.style.color = "#91a5bc";
-  }
+  updateTelemetry();
   const hud = getHudStatus();
   if (hud && state !== "BREACH" && state !== "GRANTED") {
     hud.textContent = "CAMERA STOPPED · SCANNER PAUSED";
   }
-
-  updateAlertCenterUI();
 }
+
+/* =========================================================
+   SCANNER LOOP (PHASE 4: 1200ms, strict lock, 1 request)
+   ========================================================= */
 
 async function scan() {
   if (busy || !stopCamera || !navigator.onLine || !currentUser) return;
   if (!video || video.videoWidth === 0) return;
   busy = true;
+
   const hud = getHudStatus();
   if (hud && state === "STANDBY") {
     hud.textContent = "SCANNING FOR FACE...";
   }
-  $("#hud")?.classList.add("ingesting");
-  try {
-    // 1. Obtain single-use capture session challenge nonce
-    let session = null;
-    try {
-      session = await post("/checkpoint/session", {
-        device_id: "DEV-PWA-01",
-        checkpoint_id: "CP-MAIN-01",
-      });
-    } catch (e) {
-      console.warn("Session challenge error, attempting direct frame scan", e);
-    }
 
-    const payload = { image: snapshot(video) };
+  try {
+    const session = await getOrRenewSession();
+    const tSnap0 = performance.now();
+    const snapData = snapshot(video);
+    const captureMs = Math.round(performance.now() - tSnap0);
+
+    const payload = {
+      image: snapData,
+      device_id: "DEV-PWA-01",
+      checkpoint_id: "CP-MAIN-01",
+    };
     if (session && session.session_id) {
       payload.session_id = session.session_id;
       payload.capture_nonce = session.capture_nonce;
-      payload.device_id = "DEV-PWA-01";
-      payload.checkpoint_id = "CP-MAIN-01";
+      payload.frame_seq = frameSequence++;
     }
 
+    const tApi0 = performance.now();
     const result = await post("/checkpoint/frame", payload);
-    display(result);
+    const apiMs = Math.round(performance.now() - tApi0);
 
-    // 2. If access granted, submit signed authorization token to Edge PEP door relay
+    const tRender0 = performance.now();
+    display(result);
+    const renderMs = Math.round(performance.now() - tRender0);
+
+    if (window.VAULT_DEBUG || window.location.search.includes("debug")) {
+      console.debug(`[PERF] capture_ms=${captureMs} api_total_ms=${apiMs} render_ms=${renderMs}`);
+    }
+
+    // Door PEP Relay unlock on dual custody grant
     if (result.state === "GRANTED" && result.authorization_token) {
       try {
         await post("/pep/verify", { token: result.authorization_token });
@@ -973,12 +761,44 @@ async function scan() {
     }
   } finally {
     busy = false;
-    $("#hud")?.classList.remove("ingesting");
   }
 }
 
 /* =========================================================
-   EVENT LISTENERS & LIFECYCLE
+   RESET & ACKNOWLEDGE LIFECYCLE
+   ========================================================= */
+
+async function resetCheckpoint() {
+  shownEventIds.clear();
+  clearActiveAlert();
+  manuallyStopped = false;
+
+  const modal = $("#breach-modal");
+  if (modal && modal.open) {
+    try { modal.close(); } catch {}
+  }
+
+  const modeVal = $("#mode") ? $("#mode").value : "standard";
+  const res = await post("/checkpoint/reset", { mode: modeVal });
+  display(res);
+  toast("Checkpoint reset to STANDBY");
+
+  if (currentUser && !stopCamera) {
+    await beginSurveillance();
+  }
+}
+
+function onAcknowledgeAlert() {
+  acknowledgeAlert();
+  const modal = $("#breach-modal");
+  if (modal && modal.open) {
+    try { modal.close(); } catch {}
+  }
+  updateTelemetry();
+}
+
+/* =========================================================
+   EVENT LISTENERS & BINDINGS
    ========================================================= */
 
 $("#start-camera")?.addEventListener("click", () =>
@@ -988,70 +808,18 @@ $("#start-camera")?.addEventListener("click", () =>
 );
 
 $("#stop-camera")?.addEventListener("click", onStopCamera);
+$("#reset")?.addEventListener("click", () => action($("#reset"), resetCheckpoint));
+$("#btn-checkpoint-reset")?.addEventListener("click", () => action($("#btn-checkpoint-reset"), resetCheckpoint));
 
-async function resetCheckpoint() {
-  displayedBreachEventId = null;
-  clearActiveAlert();
-  manuallyStopped = false;
-  const modal = $("#breach-modal");
-  if (modal && modal.open) {
-    try { modal.close(); } catch {}
-  }
-  const banner = $("#breach-session-banner");
-  if (banner) banner.hidden = true;
-  const res = await post("/checkpoint/reset", { mode: $("#mode").value });
-  display(res);
-  toast("Checkpoint reset to STANDBY");
-  if (currentUser) {
-    await beginSurveillance();
-  }
-}
-
-$("#reset")?.addEventListener("click", () =>
-  action($("#reset"), resetCheckpoint)
-);
-
-$("#btn-reset-alert")?.addEventListener("click", () =>
-  action($("#btn-reset-alert"), resetCheckpoint)
-);
-
-$("#btn-ac-reset-checkpoint")?.addEventListener("click", () =>
-  action($("#btn-ac-reset-checkpoint"), resetCheckpoint)
-);
-
-$("#bm-btn-reset")?.addEventListener("click", () =>
-  action($("#bm-btn-reset"), resetCheckpoint)
-);
-
-$("#btn-banner-reset-checkpoint")?.addEventListener("click", () =>
-  action($("#btn-banner-reset-checkpoint"), resetCheckpoint)
-);
-
-$("#btn-ack-alert")?.addEventListener("click", () => {
-  acknowledgeAlert();
-  updateAlertCenterUI();
-});
-
-$("#btn-ack-alert-center")?.addEventListener("click", () => {
-  acknowledgeAlert();
-  updateAlertCenterUI();
-});
-
-$("#bm-btn-ack")?.addEventListener("click", () => {
-  acknowledgeAlert();
-  updateAlertCenterUI();
-});
-
-$("#bm-btn-view")?.addEventListener("click", () => {
-  acknowledgeAlert();
-  updateAlertCenterUI();
-});
+$("#bm-btn-ack")?.addEventListener("click", onAcknowledgeAlert);
+$("#bm-btn-reset")?.addEventListener("click", () => action($("#bm-btn-reset"), resetCheckpoint));
+$("#bm-btn-view")?.addEventListener("click", onAcknowledgeAlert);
 
 $("#btn-test-siren")?.addEventListener("click", () => {
   initAudio();
   testSiren();
   toast("Alarm siren test active (2s).");
-  updateAlertCenterUI();
+  updateTelemetry();
 });
 
 $("#btn-test-telegram")?.addEventListener("click", async () => {
@@ -1068,20 +836,7 @@ $("#btn-test-telegram")?.addEventListener("click", async () => {
     toast(err.message || "Telegram test failed.");
   } finally {
     if (btn) btn.disabled = false;
-    updateAlertCenterUI();
-  }
-});
-
-$("#btn-test-push")?.addEventListener("click", async () => {
-  const btn = $("#btn-test-push");
-  if (btn) btn.disabled = true;
-  try {
-    const res = await testPush();
-    toast(`Test phone alert dispatched to ${res.sent || 0} active subscriber(s).`);
-  } catch (err) {
-    toast(err.message || "Push test dispatch failed.");
-  } finally {
-    if (btn) btn.disabled = false;
+    updateTelemetry();
   }
 });
 
@@ -1090,35 +845,14 @@ $("#toggle-mute")?.addEventListener("click", () => {
   updateMuteButton();
 });
 
-$("#btn-enable-notifs")?.addEventListener("click", async () => {
-  await requestNotificationPermission();
-  updateNotifButton();
-});
-
-// Phone push subscription (in alert center panel)
-$("#btn-enable-phone")?.addEventListener("click", async () => {
-  const btn = $("#btn-enable-phone");
-  if (btn) btn.disabled = true;
-  try {
-    initAudio(); // Prime audio on user gesture
-    await subscribePush();
-    updateNotifButton();
-    toast("This device registered for security push notifications.");
-  } catch (err) {
-    toast(err.message || "Push registration failed.");
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-});
-
 document.addEventListener("vault-alarm-state", () => {
-  updateAlertCenterUI();
+  updateTelemetry();
 });
 
 document.addEventListener("vault-critical-alert", (e) => {
-  updateAlertCenterUI();
+  updateTelemetry();
   if (e.detail) {
-    showBreachOnce(e.detail);
+    showBreachModal(e.detail);
   }
 });
 
@@ -1127,7 +861,7 @@ document.addEventListener("vault-alert-acknowledged", () => {
   if (modal && modal.open) {
     try { modal.close(); } catch {}
   }
-  updateAlertCenterUI();
+  updateTelemetry();
 });
 
 document.addEventListener("vault-alert-cleared", () => {
@@ -1135,108 +869,66 @@ document.addEventListener("vault-alert-cleared", () => {
   if (modal && modal.open) {
     try { modal.close(); } catch {}
   }
-  updateAlertCenterUI();
+  updateTelemetry();
 });
 
-async function poll() {
-  if (!currentUser || polling || !navigator.onLine) return;
-  polling = true;
-  try {
-    display(await post("/checkpoint/tick"));
-  } catch (error) {
-    $("#verdict").textContent = "VERIFICATION UNAVAILABLE · VAULT LOCKED";
-    if (error.status === 401) stop();
-  } finally {
-    polling = false;
-  }
-}
-
-setInterval(poll, 1000);
-
+// Single countdown timer tick (100ms) for smooth dial ring
 setInterval(() => {
   if (state === "WAITING") {
     const remaining = Math.max(0, (end - performance.now()) / 1000);
     const remText = remaining.toFixed(1) + "s remaining";
-    const tRem = $("#tel-remaining");
-    if (tRem) tRem.textContent = remText;
     const deadlineNote = $("#deadline-note");
     if (deadlineNote) deadlineNote.textContent = `Awaiting second authorized party · ${remText}`;
-    ring($("#ring"), state, remaining, 15);
+    const wText = $("#waiting-action-text");
+    if (wText) wText.textContent = `Second authorized person must appear within ${remText}.`;
+
+    ring($("#timer"), state, remaining, 15);
+
+    // If temporal window has expired, poll tick once to let backend register ZT-008 breach
+    if (remaining <= 0 && !busy) {
+      post("/checkpoint/tick").then(display).catch(() => {});
+    }
+  } else {
+    ring($("#timer"), state, state === "STANDBY" ? 15 : 0, 15);
   }
 }, 100);
 
-/**
- * KEY FIX: vault-auth fires AFTER initialize() in common.js resolves and
- * confirms a valid operator session. currentUser is populated at this point.
- * This is the ONLY correct place to trigger automatic surveillance startup.
- * The bare beginSurveillance() at module init (old code line 625) was the
- * root cause of the camera not starting — currentUser was still null then.
- */
+// Load Telegram configured status ONCE on startup
+async function loadTelegramStatus() {
+  try {
+    const res = await getAlertsStatus();
+    telegramConfigured = Boolean(res?.telegram_configured);
+    updateTelemetry();
+  } catch {}
+}
+
 document.addEventListener("vault-auth", async () => {
   manuallyStopped = false;
   initAudio();
   setStartupStatus("AUTHENTICATED");
-  await poll();
-  updateAlertCenterUI();
+  await loadTelegramStatus();
+  try {
+    display(await post("/checkpoint/tick"));
+  } catch {}
   setTimeout(() => beginSurveillance(), 150);
 });
 
-// On module load: poll state, and if currentUser is already authenticated, start surveillance
 if (currentUser) {
   setStartupStatus("AUTHENTICATED");
-  poll();
-  updateAlertCenterUI();
+  loadTelegramStatus();
+  post("/checkpoint/tick").then(display).catch(() => {});
   setTimeout(() => beginSurveillance(), 150);
 } else {
-  poll();
-  updateAlertCenterUI();
+  loadTelegramStatus();
+  post("/checkpoint/tick").then(display).catch(() => {});
 }
-
-// Initialize liveness display to neutral state
-const _livenessEl = $("#liveness");
-if (_livenessEl && (!_livenessEl.textContent || _livenessEl.textContent === "—")) {
-  _livenessEl.textContent = "NO FACE";
-}
-
-setInterval(() => {
-  const remaining = state === "WAITING"
-    ? Math.max(0, (end - performance.now()) / 1000)
-    : state === "STANDBY"
-      ? 15
-      : 0;
-
-  ring(
-    $("#timer"),
-    state,
-    remaining,
-    15,
-  );
-
-  if (state === "WAITING") {
-    const remText = remaining.toFixed(1) + "s remaining";
-    const verdictEl = $("#verdict");
-    if (verdictEl) {
-      verdictEl.textContent = `PRIMARY VERIFIED\nAwaiting second authorized party\n${remText}`;
-    }
-    const noteEl = $("#deadline-note");
-    if (noteEl) {
-      noteEl.textContent = `Awaiting second authorized party · ${remText}`;
-    }
-    const timerTitleEl = $("#timer-title");
-    if (timerTitleEl) {
-      timerTitleEl.textContent = "PRIMARY VERIFIED";
-    }
-    if (remaining <= 0 && !busy) {
-      poll();
-    }
-  }
-}, 50);
 
 addEventListener("pagehide", stop);
 addEventListener("offline", () => {
   stop();
   setStartupStatus("BACKEND OFFLINE", true);
-  $("#verdict").textContent = "OFFLINE · VERIFICATION PAUSED · VAULT LOCKED";
+  const verdictEl = $("#verdict");
+  if (verdictEl) verdictEl.textContent = "OFFLINE · VERIFICATION PAUSED · VAULT LOCKED";
 });
 addEventListener("online", () => {
   if (currentUser && !manuallyStopped) {

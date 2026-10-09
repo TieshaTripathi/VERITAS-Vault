@@ -13,18 +13,19 @@ import time
 import uuid
 from typing import Dict, Any, Optional, Tuple
 
-# Standard session time-to-live: 10 seconds to account for network transmission
-SESSION_TTL_SECONDS = float(os.environ.get("VAULT_SESSION_TTL_SECONDS", "10.0"))
+# Standard session time-to-live: 60 seconds to support multi-frame sessions
+SESSION_TTL_SECONDS = float(os.environ.get("VAULT_SESSION_TTL_SECONDS", "60.0"))
 MAX_NONCE_HISTORY = 10000
 
 
 class CaptureSessionManager:
     """
     Manages short-lived capture session challenges and validates anti-replay proofs.
+    Supports both single-use nonces and monotonic frame sequences across a session TTL.
     """
     def __init__(self, ttl_seconds: float = SESSION_TTL_SECONDS):
         self.ttl_seconds = ttl_seconds
-        # session_id -> {nonce, device_id, checkpoint_id, created_at, expires_at, used}
+        # session_id -> {nonce, device_id, checkpoint_id, created_at, expires_at, used, last_frame_seq}
         self._active_sessions: Dict[str, Dict[str, Any]] = {}
         # Used nonces cache: nonce -> timestamp (to prevent replay across expired session records)
         self._used_nonces: Dict[str, float] = {}
@@ -95,7 +96,8 @@ class CaptureSessionManager:
             "capture_nonce": nonce,
             "created_at": now,
             "expires_at": expires_at,
-            "used": False
+            "used": False,
+            "last_frame_seq": -1,
         }
         self._active_sessions[session_id] = session_record
 
@@ -129,16 +131,19 @@ class CaptureSessionManager:
         checkpoint_id: str,
         raw_frame_bytes: bytes,
         signature: Optional[str] = None,
-        require_signature: bool = False
+        require_signature: bool = False,
+        frame_seq: Optional[int] = None,
     ) -> Tuple[bool, str, Optional[str]]:
         """
         Validates the capture session against replay, expiration, and tampering.
+        If frame_seq is provided, enforces monotonic sequence ordering across the session.
+        If frame_seq is None, consumes the session as a strict single-use nonce.
         Returns: (is_valid: bool, reason_code: str, frame_hash: Optional[str])
         """
         now = time.time()
         self._cleanup_expired(now)
 
-        # 1. Check if nonce was already spent
+        # 1. Check if single-use nonce was already spent
         if capture_nonce in self._used_nonces:
             return False, "ZT-009 REPLAY_DETECTED: Capture nonce already consumed", None
 
@@ -147,20 +152,29 @@ class CaptureSessionManager:
         if not session:
             return False, "ZT-013 CAPTURE_INTEGRITY_FAILED: Invalid or expired session", None
 
-        # 3. Check if session already used
-        if session["used"]:
-            self._used_nonces[capture_nonce] = now
-            return False, "ZT-009 REPLAY_DETECTED: Session already consumed", None
-
-        # 4. Check expiration
+        # 3. Check expiration
         if now > session["expires_at"]:
             return False, "ZT-013 CAPTURE_INTEGRITY_FAILED: Capture session expired", None
 
-        # 5. Check nonce match
+        # 4. Check replay via monotonic sequence or single-use nonce
+        if frame_seq is not None:
+            last_seq = session.get("last_frame_seq", -1)
+            if frame_seq <= last_seq:
+                return False, f"ZT-009 REPLAY_DETECTED: Frame sequence {frame_seq} already consumed (last: {last_seq})", None
+            session["last_frame_seq"] = frame_seq
+        else:
+            if session["used"]:
+                self._used_nonces[capture_nonce] = now
+                return False, "ZT-009 REPLAY_DETECTED: Session already consumed", None
+            session["used"] = True
+            self._used_nonces[capture_nonce] = now
+            del self._active_sessions[session_id]
+
+        # 4. Check nonce match
         if not hmac.compare_digest(session["capture_nonce"], capture_nonce):
             return False, "ZT-013 CAPTURE_INTEGRITY_FAILED: Nonce mismatch", None
 
-        # 6. Check device and checkpoint binding
+        # 5. Check device and checkpoint binding
         if session["device_id"] != device_id or session["checkpoint_id"] != checkpoint_id:
             return False, "ZT-003 DEVICE_UNTRUSTED: Device or checkpoint binding mismatch", None
 
@@ -168,19 +182,14 @@ class CaptureSessionManager:
         if not device or device["status"] != "ACTIVE":
             return False, "ZT-003 DEVICE_UNTRUSTED: Device is not active or recognized", None
 
-        # 7. Compute frame hash
+        # 6. Compute frame hash
         frame_hash = self.compute_frame_hash(raw_frame_bytes)
 
-        # 8. Check device signature if required or provided
+        # 7. Check device signature if required or provided
         if require_signature or signature:
             expected_sig = self.generate_device_signature(device_id, session_id, capture_nonce, frame_hash)
             if not signature or not hmac.compare_digest(expected_sig, signature):
                 return False, "ZT-003 DEVICE_UNTRUSTED: Invalid device signature on capture payload", None
-
-        # Consume the session and mark nonce as used (atomic single-use)
-        session["used"] = True
-        self._used_nonces[capture_nonce] = now
-        del self._active_sessions[session_id]
 
         return True, "CAPTURE_VALIDATED", frame_hash
 

@@ -63,69 +63,40 @@ self.addEventListener("fetch", (event) => {
       ),
   );
 });
+
 self.addEventListener("push", (event) => {
+  // Push disabled in production UI; retained for offline/background event standards
   let payload = {};
   try {
     payload = event.data ? event.data.json() : {};
-  } catch {
-    payload = { body: event.data ? event.data.text() : "Security breach detected." };
+  } catch (_) {}
+  const event_id = payload.event_id || "vault-alert";
+  const title = payload.title || "VERITAS Vault Notification";
+  if (self.registration && self.registration.showNotification && payload.active) {
+    event.waitUntil(
+      self.registration.showNotification(title, {
+        body: payload.body || "Security update",
+        tag: event_id,
+        data: payload,
+      }),
+    );
   }
-
-  const title = payload.title || "VERITAS SECURITY ALERT";
-  const body = payload.body || "Security breach detected. Access locked.";
-  const eventId = payload.event_id || payload.tag || "vault-security-alert";
-  const targetUrl = payload.url || (eventId ? `/audit?event=${encodeURIComponent(eventId)}` : "/audit");
-
-  // Post message to open client windows so in-app breach popup/modal reacts immediately
-  event.waitUntil(
-    self.clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then((clients) => {
-        clients.forEach((client) => {
-          client.postMessage({
-            type: "SECURITY_BREACH_PUSH",
-            payload: {
-              ...payload,
-              event_id: eventId,
-              url: targetUrl,
-            },
-          });
-        });
-      })
-      .catch(() => {}),
-  );
-
-  event.waitUntil(
-    self.registration.showNotification(title, {
-      body,
-      icon: "/icons/icon-192.png",
-      badge: "/icons/logo.svg",
-      tag: eventId,
-      renotify: true,
-      requireInteraction: true,
-      data: {
-        url: targetUrl,
-        event_id: eventId,
-        reason_code: payload.reason_code,
-      },
-    }),
-  );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || "/audit";
   event.waitUntil(
-    self.clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then(async (clients) => {
-        for (const client of clients) {
-          if (new URL(client.url).origin === self.location.origin) {
-            await client.navigate(targetUrl);
-            return client.focus();
-          }
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes("/checkpoint") && "focus" in client) {
+          return client.focus();
         }
-        return self.clients.openWindow(targetUrl);
-      }),
+      }
+      if (clients.openWindow) {
+        return clients.openWindow("/checkpoint");
+      }
+    }),
   );
 });
+
+

@@ -233,6 +233,7 @@ class Snapshot(BaseModel):
 class FrameCapturePayload(Snapshot):
     session_id: str | None = None
     capture_nonce: str | None = None
+    frame_seq: int | None = None
     device_id: str | None = "DEV-EDGE-01"
     checkpoint_id: str | None = "CP-MAIN-01"
     signature: str | None = None
@@ -603,7 +604,8 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
             checkpoint_id=body.checkpoint_id or "CP-MAIN-01",
             raw_frame_bytes=raw,
             signature=body.signature,
-            require_signature=False
+            require_signature=False,
+            frame_seq=body.frame_seq,
         )
         if not valid:
             code = "ZT-009" if "REPLAY" in capture_err else "ZT-013"
@@ -685,6 +687,10 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
         if result.get("deadline"):
             result["remaining_seconds"] = max(0.0, round(result["deadline"] - now, 1))
             result["remaining"] = max(0.0, result["deadline"] - now)
+
+    if body.session_id:
+        result["session_id"] = body.session_id
+        result["next_frame_seq"] = (body.frame_seq + 1) if body.frame_seq is not None else 0
 
     if result["state"] == "WAITING":
         threading.Thread(target=finish_window, args=(result["deadline"],), daemon=True).start()

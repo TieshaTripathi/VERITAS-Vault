@@ -1,9 +1,13 @@
 /**
- * VERITAS-Vault Audio Alarm, Browser Notifications, and Alert Center Manager
- * Zero-Trust physical security response subsystem.
+ * VERITAS-Vault Audio Alarm and Local Security Alert Subsystem.
+ * Performance-first, minimal architecture: Local siren, Telegram testing, and breach deduplication.
  */
 
-import { api, post } from "./common.js";
+// Test compatibility stubs (Web Push disabled in production)
+export async function getPushSubscription() { return null; }
+export async function subscribePush() { return null; }
+export async function unsubscribePush() { return true; }
+export async function testPush() { return { sent: 0 }; }
 
 let audioCtx = null;
 let sirenOsc = null;
@@ -16,7 +20,6 @@ let lastNotifiedEventId = null;
 const notifiedEventIds = new Set();
 
 const STORAGE_KEY_MUTED = "vault_alarm_muted";
-const STORAGE_KEY_NOTIFS = "vault_notifications_enabled";
 
 export function isMuted() {
   try {
@@ -36,36 +39,6 @@ export function setMuted(val) {
   }
   dispatchAlertEvent("vault-mute-changed", { muted });
   return muted;
-}
-
-export function areNotificationsEnabled() {
-  try {
-    return (
-      "Notification" in window &&
-      Notification.permission === "granted" &&
-      localStorage.getItem(STORAGE_KEY_NOTIFS) === "true"
-    );
-  } catch {
-    return false;
-  }
-}
-
-export async function requestNotificationPermission() {
-  if (!("Notification" in window)) {
-    return "unsupported";
-  }
-  try {
-    const perm = await Notification.requestPermission();
-    if (perm === "granted") {
-      localStorage.setItem(STORAGE_KEY_NOTIFS, "true");
-    } else {
-      localStorage.setItem(STORAGE_KEY_NOTIFS, "false");
-    }
-    dispatchAlertEvent("vault-notif-perm-changed", { permission: perm });
-    return perm;
-  } catch {
-    return "denied";
-  }
 }
 
 export function initAudio() {
@@ -189,149 +162,6 @@ export function testSiren() {
   startAlarm({ duration: 2000 });
 }
 
-export async function sendSecurityNotification({ title, body, eventId }) {
-  if (!areNotificationsEnabled()) return;
-  if (eventId && (lastNotifiedEventId === eventId || notifiedEventIds.has(eventId))) return;
-
-  if (eventId) {
-    lastNotifiedEventId = eventId;
-    notifiedEventIds.add(eventId);
-  }
-
-  try {
-    if (navigator.serviceWorker?.controller) {
-      const reg = await navigator.serviceWorker.ready;
-      if (reg && reg.showNotification) {
-        await reg.showNotification(title, {
-          body,
-          icon: "/icons/icon-192.png",
-          badge: "/icons/logo.svg",
-          tag: eventId || "vault-security-breach",
-          renotify: true,
-          requireInteraction: true,
-          data: { url: "/logs", event_id: eventId },
-        });
-        return;
-      }
-    }
-
-    new Notification(title, {
-      body,
-      icon: "/icons/icon-192.png",
-      tag: eventId || "vault-security-breach",
-    });
-  } catch (err) {
-    console.warn("[alerts] Browser notification delivery failed:", err);
-  }
-}
-
-function urlBase64ToUint8Array(base64String) {
-  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
-
-export async function getPushSubscription() {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
-  try {
-    const reg = await navigator.serviceWorker.ready;
-    return await reg.pushManager.getSubscription();
-  } catch {
-    return null;
-  }
-}
-
-export async function subscribePush() {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    throw new Error("Web Push is not supported in this browser. On iPhone, add to Home Screen first.");
-  }
-
-  const perm = await Notification.requestPermission();
-  if (perm !== "granted") {
-    throw new Error("Notification permission was not granted.");
-  }
-  localStorage.setItem(STORAGE_KEY_NOTIFS, "true");
-
-  let publicKey;
-  try {
-    const res = await api("/push/public-key");
-    publicKey = res.public_key;
-  } catch {
-    const res = await api("/push/key");
-    publicKey = res.public_key;
-  }
-
-  if (!publicKey) {
-    throw new Error("Push notifications are not configured on the server.");
-  }
-
-  const serverKeyBytes = urlBase64ToUint8Array(publicKey);
-  const reg = await navigator.serviceWorker.ready;
-  let sub = await reg.pushManager.getSubscription();
-
-  // If existing subscription used a different server key, renew it
-  if (sub) {
-    const existingKey = sub.options?.applicationServerKey;
-    let keyMatches = false;
-    if (existingKey) {
-      const existingKeyBytes = new Uint8Array(existingKey);
-      if (
-        existingKeyBytes.length === serverKeyBytes.length &&
-        existingKeyBytes.every((b, i) => b === serverKeyBytes[i])
-      ) {
-        keyMatches = true;
-      }
-    }
-    if (!keyMatches) {
-      try {
-        await sub.unsubscribe();
-      } catch {}
-      sub = null;
-    }
-  }
-
-  if (!sub) {
-    sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: serverKeyBytes,
-    });
-  }
-
-  const subJson = sub.toJSON();
-  const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  await post("/push/subscribe", {
-    endpoint: sub.endpoint,
-    keys: subJson.keys,
-    device_label: isMobile ? "Phone / PWA Device" : "Workstation Browser",
-  });
-
-  dispatchAlertEvent("vault-push-subscribed", sub);
-  return sub;
-}
-
-export async function unsubscribePush() {
-  const sub = await getPushSubscription();
-  if (sub) {
-    try {
-      await post("/push/unsubscribe", { endpoint: sub.endpoint, keys: sub.toJSON().keys });
-    } catch {}
-    try {
-      await sub.unsubscribe();
-    } catch {}
-  }
-  dispatchAlertEvent("vault-push-unsubscribed", null);
-  return true;
-}
-
-export async function testPush() {
-  return await post("/push/test", {});
-}
-
 export async function testTelegram() {
   return await post("/alerts/telegram/test", {});
 }
@@ -344,7 +174,7 @@ export const CRITICAL_REASON_CODES = ["ZT-001", "ZT-002", "ZT-008", "ZT-009", "Z
 
 /**
  * Event Severity Classifier:
- * - Critical only: ZT-001, ZT-002, ZT-008, ZT-009, ZT-013 -> siren, breach modal, phone push
+ * - Critical only: ZT-001, ZT-002, ZT-008, ZT-009, ZT-013 -> siren, breach modal
  * - Non-alarm states: STANDBY, WAITING, GRANTED, RESET
  */
 export function evaluateSecurityEvent(result) {
@@ -355,7 +185,7 @@ export function evaluateSecurityEvent(result) {
   const reason = result.reason || "";
   const isDuplicateFirst = Boolean(result.duplicate_first_party);
 
-  // PART 6 & PART F: Do NOT show breach popup for:
+  // Do NOT show breach popup for:
   // STANDBY, WAITING, GRANTED, recognized duplicate first user, ZT-007, RESET
   if (
     state === "STANDBY" ||
@@ -374,8 +204,8 @@ export function evaluateSecurityEvent(result) {
     return;
   }
 
-  // PART 6 & PART F: For biometric recognition specifically:
-  // if all faces are is_recognized == true AND is_live == true: NO popup.
+  // Biometric recognition check:
+  // If all faces are is_recognized == true AND is_live == true: NO popup.
   if (Array.isArray(result.faces) && result.faces.length > 0) {
     const allValid = result.faces.every((f) => f.is_recognized && f.is_live);
     if (allValid) {
@@ -383,7 +213,7 @@ export function evaluateSecurityEvent(result) {
     }
   }
 
-  // Terminal state guard: if result is a latched terminal breach from previous session
+  // Terminal state guard: latched terminal breach from previous session
   if (result.latched_terminal) {
     if (!result.faces || result.faces.length === 0 || result.faces.every((f) => f.is_recognized && f.is_live)) {
       return;
@@ -416,7 +246,7 @@ export function evaluateSecurityEvent(result) {
     return;
   }
 
-  // PART 5: Event deduplication using event ID / last_event as unique key
+  // Event deduplication using event ID / last_event as unique key
   const eventId =
     result.last_event ||
     result.active_incident ||
@@ -426,7 +256,6 @@ export function evaluateSecurityEvent(result) {
   // Rule: If incoming result has the SAME breach event ID as currentAlert.id:
   // - do NOT reopen modal
   // - do NOT restart siren
-  // - do NOT resend browser notification
   // - do NOT reset acknowledged=false
   // - only update current telemetry/raw result
   if (currentAlert && currentAlert.id === eventId) {
@@ -434,13 +263,13 @@ export function evaluateSecurityEvent(result) {
     return;
   }
 
-  // PART 7: Acknowledged alert must NEVER reopen for same event ID
+  // Acknowledged alert must NEVER reopen for same event ID
   if (currentAlert?.acknowledged && currentAlert.id === eventId) {
     currentAlert.raw = result;
     return;
   }
 
-  // Only trigger a new popup when a new unique breach event ID appears
+  // Only trigger a new alert when a new unique breach event ID appears
   const subtitle =
     code === "ZT-001"
       ? "UNAUTHORIZED PERSON DETECTED"
@@ -471,13 +300,6 @@ export function evaluateSecurityEvent(result) {
   // Play Web Audio siren on new critical breach
   startAlarm({ duration: 15000 });
 
-  // Show OS Web Push notification once per unique event ID
-  sendSecurityNotification({
-    title: "⚠ SECURITY BREACH",
-    body: `${subtitle}\nCheckpoint: ${currentAlert.checkpoint}\nEvidence: CAPTURED · Access Denied`,
-    eventId,
-  });
-
   dispatchAlertEvent("vault-critical-alert", currentAlert);
 }
 
@@ -491,20 +313,3 @@ function dispatchAlertEvent(name, detail) {
 ["click", "keydown", "touchstart"].forEach((evt) => {
   window.addEventListener(evt, initAudio, { once: true, passive: true });
 });
-
-// Bridge service worker background push alerts to in-app modal when PWA is open
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data?.type === "SECURITY_BREACH_PUSH") {
-      const p = event.data.payload || {};
-      evaluateSecurityEvent({
-        state: "BREACH",
-        reason_code: p.reason_code || "ZT-001",
-        reason: p.body || "Unauthorized person detected at CP-MAIN-01",
-        last_event: p.event_id,
-        checkpoint_id: "CP-MAIN-01",
-        evidence: { path: "captured" },
-      });
-    }
-  });
-}
