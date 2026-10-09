@@ -12,11 +12,11 @@ import os
 class BiometricConfig:
     # Recognition Thresholds
     # Cosine similarity >= recognition_threshold -> VERIFIED
-    recognition_threshold: float = float(os.environ.get("VAULT_RECOGNITION_THRESHOLD", "0.70"))
+    recognition_threshold: float = float(os.environ.get("VAULT_RECOGNITION_THRESHOLD", "0.75"))
     
     # Cosine similarity in [possible_match_threshold, recognition_threshold) -> POSSIBLE_MATCH
     # POSSIBLE_MATCH never grants authorization; prompts user to hold still / adjust
-    possible_match_threshold: float = float(os.environ.get("VAULT_POSSIBLE_MATCH_THRESHOLD", "0.55"))
+    possible_match_threshold: float = float(os.environ.get("VAULT_POSSIBLE_MATCH_THRESHOLD", "0.65"))
 
     # Temporal Consensus Settings
     # Minimum consistent matches out of last consensus_window_size observations to declare VERIFIED

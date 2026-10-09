@@ -57,6 +57,9 @@ class FaceTrack:
         # Always run if track has no observation history yet
         if not self.history:
             return True
+        # Rapidly gather observations during initial verification until consensus forms
+        if self.consensus_verdict == "VERIFYING" and len(self.history) < 3:
+            return True
         return (now - self.last_embedding_time) * 1000.0 >= interval_ms
 
     def record_observation(

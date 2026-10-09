@@ -98,7 +98,7 @@ class OpenCVFaceDetector(BaseFaceDetector):
                 landmarks["right_eye"] = (float(x1 + e2[0] + e2[2] / 2.0), float(y1 + e2[1] + e2[3] / 2.0))
 
             detected.append(DetectedFace(
-                bbox=(x1, y1, w, h),
+                bbox=(int(x1), int(y1), int(w), int(h)),
                 crop=crop,
                 confidence=0.95,
                 landmarks=landmarks if landmarks else None,

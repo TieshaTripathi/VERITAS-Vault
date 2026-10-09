@@ -90,6 +90,7 @@ class StandardFeatureEmbeddingExtractor(BaseEmbeddingExtractor):
 
         # 1. Low-frequency 2D DCT coefficients (first 20x20 = 400 dimensions)
         dct = cv2.dct(eq.astype(np.float32) / 255.0)
+        dct[0, 0] = 0.0  # Zero out DC illumination bias to isolate facial geometry
         dct_feats = dct[:20, :20].flatten()
         dct_norm = dct_feats / (np.linalg.norm(dct_feats) + 1e-6)
 

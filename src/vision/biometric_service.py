@@ -219,15 +219,13 @@ class BiometricService:
                 "candidate_similarity": round(float(similarity), 3),
                 "liveness": liveness_label,
                 "pad_status": "PASS" if face.is_live else "FAIL",
-                "pad_score": face.pad_score,
-                "pad_confidence": face.pad_confidence,
+                "pad_score": float(face.pad_score),
+                "pad_confidence": float(face.pad_confidence),
                 "pad_signals": face.pad_signals,
                 "pad_reason_codes": face.pad_reason_codes,
                 "track_id": track.track_id,
-                "bbox": list(face.bbox),
-                "variance": round(face.variance, 1),
-                "crop": face.crop,
-                "norm": cv2.resize(cv2.equalizeHist(cv2.cvtColor(face.crop, cv2.COLOR_BGR2GRAY)), (128, 128))
+                "bbox": [int(b) for b in face.bbox],
+                "variance": round(float(face.variance), 1)
             })
 
         total_biometric_ms = round((time.perf_counter() - t_start) * 1000.0, 2)
