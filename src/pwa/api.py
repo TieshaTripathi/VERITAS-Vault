@@ -4,11 +4,13 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Any, Dict, Optional
@@ -24,6 +26,7 @@ from src.pwa.alerts import (
     drain_outbox,
     ensure_vapid_keys,
     get_active_subscriptions,
+    get_last_telegram_status,
     get_telegram_config,
     get_telegram_diagnostic_status,
     send_test_push,
@@ -41,7 +44,35 @@ from src.policy.pdp import default_pdp
 from src.policy.door_controller import default_door_controller
 from src.blockchain.audit_chain import default_audit_ledger
 
-app = FastAPI(title="VERITAS Vault API", docs_url=None, redoc_url=None, openapi_url=None)
+logger = logging.getLogger("vault.api")
+
+
+async def alert_worker_loop():
+    """Automatic alert worker loop running in background without requiring HTTP traffic."""
+    while True:
+        try:
+            await run_in_threadpool(drain_outbox)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.warning("Background alert worker error: %s", exc)
+        await asyncio.sleep(2.0)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    worker_task = asyncio.create_task(alert_worker_loop())
+    try:
+        yield
+    finally:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="VERITAS Vault API", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 PUBLIC = ROOT / "public"
 
 FRONTEND_ORIGIN = os.environ.get(
@@ -463,6 +494,60 @@ async def finish_window(deadline):
     await run_in_threadpool(drain_outbox)
 
 
+async def auto_relock_after_grant(delay_seconds: float = 4.0):
+    """Automatically relocks the door back to STANDBY after the simulated access cycle."""
+    await asyncio.sleep(delay_seconds)
+    store = Store()
+    for _ in range(5):
+        state, ver = store.get("checkpoint:main")
+        if not state or state.get("state") != "GRANTED":
+            return
+        fresh_state = fresh(state.get("mode", "standard"))
+        fresh_state.update(reason="Door relocked · Vault secure")
+        if store.cas("checkpoint:main", ver, fresh_state, None):
+            return
+
+
+INCIDENT_COOLDOWN_SECONDS = 20.0
+FACE_ABSENCE_RESET_SECONDS = 3.5
+
+
+def get_or_create_incident(faces, reason_code="ZT-001"):
+    """Deduplicates breach incidents for continuous surveillance.
+    Returns (is_duplicate: bool, incident_id: str).
+    """
+    store = Store()
+    now = time.time()
+    active, ver = store.get("incident:active")
+    has_breach_face = any(not f.get("is_recognized") or not f.get("is_live") for f in faces)
+
+    if not has_breach_face:
+        if active and (now - active.get("last_seen", 0) > FACE_ABSENCE_RESET_SECONDS):
+            store.cas("incident:active", ver, None)
+        return False, None
+
+    if active and active.get("id"):
+        time_since_last_seen = now - active.get("last_seen", 0)
+        cooldown_active = now < active.get("cooldown_until", 0)
+        continuous = time_since_last_seen <= FACE_ABSENCE_RESET_SECONDS
+
+        if continuous and cooldown_active:
+            active["last_seen"] = now
+            store.cas("incident:active", ver, active)
+            return True, active["id"]
+
+    new_id = str(uuid.uuid4())
+    new_record = {
+        "id": new_id,
+        "reason_code": reason_code,
+        "started_at": now,
+        "last_seen": now,
+        "cooldown_until": now + INCIDENT_COOLDOWN_SECONDS,
+    }
+    store.cas("incident:active", ver, new_record)
+    return False, new_id
+
+
 @app.post("/api/checkpoint/frame")
 def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(operator)):
     rate_limit("scan:" + user["id"], 120)
@@ -484,6 +569,12 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
     if current and current.get("state") in ("GRANTED", "BREACH", "DENIED"):
         res = dict(current)
         res.update(faces=faces, quality=quality_report, frame_size=frame_size)
+        active_inc, _ = store.get("incident:active")
+        if active_inc and any(not f.get("is_recognized") or not f.get("is_live") for f in faces):
+            active_inc["last_seen"] = now
+            store.put("incident:active", active_inc)
+        res["active_incident"] = active_inc.get("id") if (active_inc and current.get("state") == "BREACH") else (current.get("last_event") or "NONE")
+        res["incident_code"] = current.get("reason_code") or "NONE"
         return res
 
     # Anti-replay capture validation if session challenge was provided
@@ -519,8 +610,23 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
             store.cas("checkpoint:main", ver, state, event, job)
             background.add_task(drain_outbox)
             state.update(reason_code=code, safe_user_message="ACCESS DENIED: Capture integrity check failed", risk_score=95,
-                         faces=faces, quality=quality_report, frame_size=frame_size)
+                         faces=faces, quality=quality_report, frame_size=frame_size, active_incident=event_id, incident_code=code)
             return state
+
+    # Incident deduplication for continuous unauthorized faces
+    potential_breach_code = (
+        "ZT-002" if any(not f.get("is_live") for f in faces)
+        else "ZT-001" if any(not f.get("is_recognized") for f in faces)
+        else None
+    )
+    active_incident_id = None
+    if potential_breach_code:
+        is_dup, inc_id = get_or_create_incident(faces, potential_breach_code)
+        active_incident_id = inc_id
+        if is_dup and current.get("state") == "BREACH":
+            res = dict(current)
+            res.update(faces=faces, quality=quality_report, frame_size=frame_size, active_incident=inc_id, incident_code=potential_breach_code)
+            return res
 
     digest = hashlib.sha256(frame.tobytes()).hexdigest()  # Hash in memory before any storage.
     proof = None
@@ -543,6 +649,9 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
     elif result["state"] == "BREACH":
         result["safe_user_message"] = "ACCESS DENIED: Contact Security"
         result["policy_version"] = "VAULT-ZT-v1.0"
+
+    result["active_incident"] = active_incident_id or result.get("last_event") or "NONE"
+    result["incident_code"] = result.get("reason_code") or "NONE"
 
     if result["state"] == "WAITING":
         background.add_task(finish_window, result["deadline"])
@@ -576,6 +685,10 @@ def tick(background: BackgroundTasks, user=Depends(operator)):
     result, terminal = transition()
     if terminal:
         background.add_task(drain_outbox)
+    store = Store()
+    active_inc, _ = store.get("incident:active")
+    result["active_incident"] = active_inc.get("id") if (active_inc and result.get("state") == "BREACH") else (result.get("last_event") or "NONE")
+    result["incident_code"] = result.get("reason_code") or "NONE"
     return result
 
 
@@ -591,11 +704,15 @@ def reset(body: Mode, user=Depends(operator)):
     state, version = store.get("checkpoint:main")
     if state and state["state"] == "WAITING":
         raise HTTPException(409, "Wait for the active custody window to finish")
+    store.put("incident:active", None)
     event = {"id": str(uuid.uuid4()), "timestamp": utc(), "verdict": "RESET", "mode": body.mode,
              "parties": [], "reason": "Operator reset: " + user["id"], "evidence": {}, "status": "RECORDED"}
     if not store.cas("checkpoint:main", version, fresh(body.mode), event):
         raise HTTPException(409, "Checkpoint changed; retry")
-    return fresh(body.mode)
+    fresh_state = fresh(body.mode)
+    fresh_state["active_incident"] = "NONE"
+    fresh_state["incident_code"] = "NONE"
+    return fresh_state
 
 
 @app.get("/api/logs")
@@ -680,8 +797,10 @@ def alerts_status(user=Depends(operator)):
     store = Store()
     active_subs = get_active_subscriptions(store)
     tg_cfg = get_telegram_config()
+    last_status = get_last_telegram_status(store)
     return {
         "telegram_configured": tg_cfg["configured"],
+        "last_telegram_status": last_status,
         "push_configured": bool(ensure_vapid_keys(store).get("VAPID_PUBLIC_KEY")),
         "subscriptions_count": len(active_subs),
     }

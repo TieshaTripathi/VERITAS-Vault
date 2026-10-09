@@ -48,8 +48,41 @@ CHECKPOINT = f'''
 </div>
 <div class="status-banner" id="verdict" role="status">LOCKED · AUTHENTICATE TO BEGIN VERIFICATION</div>
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / LIVE BIOMETRIC FEED</h2><span class="badge" id="feed-state">STANDBY</span></div>
-{camera()}<div class="camera-controls"><button class="primary" id="start-camera">Start surveillance</button><button id="stop-camera" disabled>Stop camera</button><small>VIDEO STAYS LOCAL · SAMPLED FRAMES VERIFIED SERVER-SIDE</small></div>
-<div class="telemetry"><div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div><div class="stat"><span class="stat-label">DETECTED</span><strong id="face-count">—</strong></div><div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">—</strong></div><div class="stat"><span class="stat-label">ACCESS STATE</span><strong id="lock-state">LOCKED</strong></div></div></section>
+{camera()}
+<div class="camera-fallback" id="camera-fallback-bar" hidden>
+  <span id="camera-prompt-text">CAMERA PERMISSION REQUIRED</span>
+  <button class="primary" id="start-camera">START CAMERA</button>
+</div>
+<div class="telemetry">
+  <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div>
+  <div class="stat"><span class="stat-label">SCANNER</span><strong id="scanner-status">STANDBY</strong></div>
+  <div class="stat"><span class="stat-label">DETECTED</span><strong id="face-count">0</strong></div>
+  <div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">NO FACE</strong></div>
+  <div class="stat"><span class="stat-label">ACCESS STATE</span><strong id="lock-state">LOCKED</strong></div>
+  <div class="stat"><span class="stat-label">TELEGRAM</span><strong id="telegram-status">READY</strong></div>
+  <div class="stat"><span class="stat-label">ALARM</span><strong id="alarm-status">SILENT</strong></div>
+  <div class="stat"><span class="stat-label">ACTIVE INCIDENT</span><strong id="incident-status">NONE</strong></div>
+</div>
+<details class="diagnostics-panel" id="diagnostics-panel">
+  <summary class="diagnostics-summary">⚙ ADVANCED / DIAGNOSTICS</summary>
+  <div class="diagnostics-content">
+    <div class="diag-group">
+      <span class="diag-label">Surveillance Camera Stream</span>
+      <div class="diag-actions">
+        <button id="stop-camera" class="quiet" disabled>Stop camera</button>
+      </div>
+    </div>
+    <div class="diag-group">
+      <span class="diag-label">Diagnostic Alarms & Alerts</span>
+      <div class="diag-actions">
+        <button type="button" id="btn-test-siren" class="quiet">Test Siren 🔊</button>
+        <button type="button" id="toggle-mute" class="quiet">Siren On</button>
+        <button type="button" id="btn-test-telegram" class="quiet">Test Telegram ✈️</button>
+      </div>
+    </div>
+  </div>
+</details>
+</section>
 <div class="stack"><section class="panel"><div class="panel-head"><h2 class="section-label">02 / DUAL-CUSTODY VERIFICATION</h2><span class="badge">Δt ≤ 5.0s</span></div>
 <div class="party" id="party-0"><div class="avatar">1</div><div><strong>Awaiting identity</strong><small>Primary officer / customer</small></div></div>
 <div class="party" id="party-1"><div class="avatar">2</div><div><strong>Awaiting identity</strong><small>Second distinct party</small></div></div>
@@ -59,11 +92,11 @@ CHECKPOINT = f'''
 <div class="alert-center-box" id="alert-center-standby">
   <div class="alert-center-row">
     <div class="alert-field"><span class="field-label">Alarm Sound</span><strong id="alarm-state-indicator" class="field-val">SILENT</strong></div>
-    <div class="ac-actions"><button type="button" id="btn-test-siren" class="ac-btn quiet">TEST SIREN 🔊</button><button type="button" id="toggle-mute" class="ac-btn">SIREN ON</button></div>
+    <div class="alert-field"><span class="field-label">Telegram Channel</span><strong id="telegram-status-indicator" class="field-val">READY</strong></div>
   </div>
   <div class="alert-center-row">
-    <div class="alert-field"><span class="field-label">Telegram Alerts</span><strong id="telegram-status-indicator" class="field-val">NOT CONFIGURED</strong></div>
-    <div class="ac-actions"><button type="button" id="btn-test-telegram" class="ac-btn quiet">TEST TELEGRAM ✈️</button></div>
+    <div class="alert-field"><span class="field-label">Surveillance State</span><strong id="ac-surveillance-status" class="field-val" style="color:var(--green)">AUTOMATIC</strong></div>
+    <div class="alert-field"><span class="field-label">Incident Tracking</span><strong id="ac-incident-status" class="field-val">MONITORING</strong></div>
   </div>
 </div>
 <div class="alert-center-box breach-box" id="alert-center-breach" hidden>
@@ -78,7 +111,7 @@ CHECKPOINT = f'''
   </div>
   <div class="alert-center-actions">
     <a href="/audit" id="btn-ac-view-evidence" class="ac-btn view-ev-btn">VIEW EVIDENCE 👁</a>
-    <button type="button" id="btn-ack-alert" class="ack-btn">ACKNOWLEDGE ALERT</button>
+    <button type="button" id="btn-ack-alert-center" class="ack-btn">ACKNOWLEDGE ALERT</button>
   </div>
 </div></section>
 <dialog id="breach-modal" class="breach-modal" role="alertdialog" aria-modal="true" aria-labelledby="bm-title">

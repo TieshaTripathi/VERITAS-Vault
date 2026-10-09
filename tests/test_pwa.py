@@ -938,3 +938,101 @@ def test_frontend_files_contain_correct_notification_and_camera_handlers():
     assert "payload.title" in sw_text
 
 
+def test_continuous_surveillance_deduplicates_intruder_incident(client, monkeypatch):
+    """Proves that a continuous intruder standing in front of the camera for repeated scans
+    creates only one incident, one audit record, and one alert job during cooldown."""
+    signin(client)
+    intruder = [{"id": "INTRUDER_99", "name": "Unknown Person", "role": "Unknown", "is_recognized": False, "is_live": True}]
+    monkeypatch.setattr(
+        backend,
+        "recognize",
+        lambda frame, people: (intruder, {"texture_ok": True, "face_count": 1}),
+    )
+
+    # Frame 1: Initial breach detection
+    r1 = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert d1["state"] == "BREACH"
+    assert d1["incident_code"] == "ZT-001"
+    first_incident = d1["active_incident"]
+    assert first_incident != "NONE"
+
+    # Frame 2: Same intruder visible 500ms later (simulating continuous surveillance loop)
+    r2 = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["state"] == "BREACH"
+    assert d2["active_incident"] == first_incident
+
+    # Frame 3: Same intruder visible 1200ms later
+    r3 = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r3.status_code == 200
+    d3 = r3.json()
+    assert d3["state"] == "BREACH"
+    assert d3["active_incident"] == first_incident
+
+    # Verify duplicate suppression: Exactly 1 audit log and 1 alert job exist
+    store = Store()
+    assert len(store.logs()) == 1
+    assert len(store.records("job:")) == 1
+
+    # Reset checkpoint: incident is cleared
+    reset_res = client.post("/api/checkpoint/reset", json={"mode": "standard"})
+    assert reset_res.status_code == 200
+    assert reset_res.json()["active_incident"] == "NONE"
+
+    # Frame 4 after reset: new incident is registered
+    r4 = client.post("/api/checkpoint/frame", json={"image": jpeg()})
+    assert r4.status_code == 200
+    d4 = r4.json()
+    assert d4["state"] == "BREACH"
+    assert d4["active_incident"] != first_incident
+    breach_logs = [l for l in store.logs() if l.get("verdict") == "BREACH"]
+    assert len(breach_logs) == 2
+    assert len(store.records("job:")) == 2
+
+
+@pytest.mark.anyio
+async def test_automatic_alert_worker_loop_drains_jobs(monkeypatch):
+    """Proves that alert_worker_loop processes pending alert jobs automatically."""
+    import asyncio
+    from src.pwa import alerts
+
+    delivered_jobs = []
+    def mock_deliver(key, job, attempt):
+        delivered_jobs.append(job["id"])
+        job["done"] = True
+        job["status"] = "SENT"
+        Store().put(key, job)
+
+    monkeypatch.setattr(alerts, "deliver", mock_deliver)
+
+    store = Store()
+    test_job = {
+        "id": "job-auto-drain-001",
+        "created_at": "2026-10-09T05:00:00Z",
+        "done": False,
+        "attempts": 0,
+        "status": "PENDING",
+        "checkpoint": "CP-MAIN-01",
+        "reason_code": "ZT-001",
+        "reason": "Test auto drain",
+    }
+    store.put("job:job-auto-drain-001", test_job)
+
+    # Run alert_worker_loop for 1 iteration
+    worker_task = asyncio.create_task(backend.alert_worker_loop())
+    await asyncio.sleep(0.1)
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
+
+    assert "job-auto-drain-001" in delivered_jobs
+    saved, _ = store.get("job:job-auto-drain-001")
+    assert saved["done"] is True
+
+
+
