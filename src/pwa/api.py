@@ -227,6 +227,7 @@ def health():
         "cloud_configured": bool(os.environ.get("SUPABASE_URL")),
         "auth_configured": bool(os.environ.get("SUPABASE_URL") or os.environ.get("VAULT_OPERATOR_PASSWORD_HASH")),
         "encryption_configured": bool(os.environ.get("VAULT_ENCRYPTION_KEY")),
+        "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")),
         "commit": os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "local"
     }
 
