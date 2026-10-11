@@ -47,6 +47,14 @@ export async function api(path, options = {}) {
   const timeout = setTimeout(() => controller.abort(), 30000);
 
   try {
+    const sessionToken =
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("vault_session_token")
+        : null;
+    const authHeader = sessionToken
+      ? { Authorization: `Bearer ${sessionToken}` }
+      : {};
+
     const response = await fetch(API_BASE + "/api" + path, {
       credentials: "include",
       ...options,
@@ -54,6 +62,7 @@ export async function api(path, options = {}) {
       headers: {
         "Content-Type": "application/json",
         "X-Vault-Request": "1",
+        ...authHeader,
         ...options.headers,
       },
       cache: "no-store",
@@ -249,6 +258,10 @@ if (authForm) {
         },
       );
 
+      if (currentUser && currentUser.token) {
+        localStorage.setItem("vault_session_token", currentUser.token);
+      }
+
       $("#password").value = "";
 
       const dialog = $("#auth-dialog");
@@ -285,8 +298,8 @@ const signoutButton = $("#signout");
 if (signoutButton) {
   signoutButton.onclick = () =>
     action(signoutButton, async () => {
-      await post("/auth/logout");
-
+      localStorage.removeItem("vault_session_token");
+      await post("/auth/logout").catch(() => {});
       location.reload();
     });
 }
@@ -316,6 +329,30 @@ export async function initialize() {
 
     if (notice) {
       notice.textContent = "";
+    }
+
+    // Role & Device adaptation for Mobile Monitoring PWA
+    const isMobile =
+      typeof window !== "undefined" &&
+      (window.innerWidth <= 768 ||
+        /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent));
+
+    if (isMobile || currentUser?.role === "monitor") {
+      document.body.classList.add("mobile-pwa", "monitor-mode");
+      document
+        .querySelectorAll(
+          '.nav a[href="/enrollment"], .nav a[href="/control"]',
+        )
+        .forEach((el) => {
+          el.style.display = "none";
+        });
+
+      if (
+        location.pathname === "/enrollment" ||
+        location.pathname === "/control"
+      ) {
+        location.replace("/checkpoint");
+      }
     }
 
     document.dispatchEvent(

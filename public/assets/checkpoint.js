@@ -610,6 +610,17 @@ function updateTelemetry() {
     }
   }
 
+  const mobBadge = $("#mobile-push-badge");
+  if (mobBadge) {
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      mobBadge.textContent = "ACTIVE";
+      mobBadge.className = "badge GRANTED";
+    } else {
+      mobBadge.textContent = "STANDBY";
+      mobBadge.className = "badge";
+    }
+  }
+
   updateMuteButton();
 }
 
@@ -919,6 +930,35 @@ $("#btn-checkpoint-reset")?.addEventListener("click", () => action($("#btn-check
 $("#bm-btn-ack")?.addEventListener("click", onAcknowledgeAlert);
 $("#bm-btn-reset")?.addEventListener("click", () => action($("#bm-btn-reset"), resetCheckpoint));
 $("#bm-btn-view")?.addEventListener("click", onAcknowledgeAlert);
+
+$("#btn-mobile-enable-push")?.addEventListener("click", async () => {
+  const btn = $("#btn-mobile-enable-push");
+  if (btn) btn.disabled = true;
+  try {
+    const { enablePushNotifications } = await import("./alerts.js");
+    await enablePushNotifications();
+    toast("Security notifications enabled on this device.");
+    updateTelemetry();
+  } catch (err) {
+    toast(err.message || "Push permission denied.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+$("#btn-mobile-test-push")?.addEventListener("click", async () => {
+  const btn = $("#btn-mobile-test-push");
+  if (btn) btn.disabled = true;
+  try {
+    const { testPush } = await import("./alerts.js");
+    await testPush();
+    toast("Test push notification dispatched.");
+  } catch (err) {
+    toast("Failed to dispatch test push.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
 
 $("#btn-test-siren")?.addEventListener("click", () => {
   initAudio();

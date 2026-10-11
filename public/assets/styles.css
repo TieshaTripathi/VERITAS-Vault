@@ -1776,3 +1776,68 @@ a.button:hover {
   font-size: 12px;
 }
 
+/* =========================================================
+   MOBILE PWA & MONITOR-ONLY VIEW
+   Phone PWA contains only:
+   1. Live Status / Live Feed
+   2. Audit Logs / Breach Events
+   3. Push Notifications
+   ========================================================= */
+
+@media (max-width: 768px), (pointer: coarse) and (max-width: 900px) {
+  body.mobile-pwa .nav a[href="/enrollment"],
+  body.mobile-pwa .nav a[href="/control"],
+  body.monitor-mode .nav a[href="/enrollment"],
+  body.monitor-mode .nav a[href="/control"] {
+    display: none !important;
+  }
+
+  body.mobile-pwa #btn-checkpoint-reset,
+  body.monitor-mode #btn-checkpoint-reset,
+  body.mobile-pwa #diagnostics-panel,
+  body.monitor-mode #diagnostics-panel,
+  body.mobile-pwa .stack .panel,
+  body.monitor-mode .stack .panel,
+  body.mobile-pwa .danger-zone-panel,
+  body.monitor-mode .danger-zone-panel {
+    display: none !important;
+  }
+
+  body.mobile-pwa .mobile-notifications-card,
+  body.monitor-mode .mobile-notifications-card {
+    display: block !important;
+  }
+}
+
+body.monitor-mode .nav a[href="/enrollment"],
+body.monitor-mode .nav a[href="/control"] {
+  display: none !important;
+}
+
+body.monitor-mode #btn-checkpoint-reset,
+body.monitor-mode #diagnostics-panel,
+body.monitor-mode .danger-zone-panel {
+  display: none !important;
+}
+
+.mobile-notifications-card {
+  display: none;
+  background: rgba(16, 28, 43, 0.85);
+  border: 1px solid var(--cyan, #00f0ff);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+
+.mobile-notifications-card h3,
+.mobile-notifications-card strong {
+  color: var(--cyan, #00f0ff);
+  letter-spacing: 1px;
+}
+
+.mobile-notifications-card p {
+  margin: 0 0 10px 0;
+  font-size: 12px;
+  color: #91a5bc;
+}
+

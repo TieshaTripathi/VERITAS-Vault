@@ -49,6 +49,17 @@ CHECKPOINT = f'''
   <div class="stat"><span class="stat-label">PUSH</span><strong id="push-status">READY</strong></div>
   <div class="stat"><span class="stat-label">ALARM</span><strong id="alarm-status">SILENT</strong></div>
 </div>
+<div class="mobile-notifications-card" id="mobile-push-card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+    <strong style="color:var(--cyan,#00f0ff);font-size:12px;letter-spacing:1px;">🔔 PWA PUSH ALERTS</strong>
+    <span class="badge" id="mobile-push-badge">STANDBY</span>
+  </div>
+  <p style="font-size:12px;color:#91a5bc;margin:0 0 10px 0;">Receive immediate real-time notifications for confirmed security breaches on this mobile device.</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button type="button" class="primary" id="btn-mobile-enable-push" style="flex:1;">ENABLE SECURITY NOTIFICATIONS</button>
+    <button type="button" class="quiet" id="btn-mobile-test-push">TEST PUSH 🔔</button>
+  </div>
+</div>
 <details class="diagnostics-panel" id="diagnostics-panel">
   <summary class="diagnostics-summary">⚙ ADVANCED / DIAGNOSTICS</summary>
   <div class="diagnostics-content">
@@ -239,7 +250,7 @@ def build():
     for page, content in pages.items():
         eyebrow, title, subtitle = TITLES[page]
         script_name = "logs" if page == "audit" else page
-        nav = ''.join(f'<a href="/{key}" {"aria-current=page" if key==page or (page=="audit" and key=="logs") else ""}>{icon(key)}<span>{label}</span></a>' for key,label in NAMES.items())
+        nav = ''.join(f'<a href="/{key}" class="nav-{key}" {"aria-current=page" if key==page or (page=="audit" and key=="logs") else ""}>{icon(key)}<span>{label}</span></a>' for key,label in NAMES.items())
         html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="theme-color" content="#0b0f19"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="description" content="VERITAS-Vault authenticated security operations"><title>{title} · VERITAS-Vault</title><link rel="manifest" href="/manifest.json"><link rel="icon" href="/icons/logo.svg" type="image/svg+xml"><link rel="apple-touch-icon" href="/icons/icon-192.png"><link rel="stylesheet" href="/assets/styles.css"><script type="module" src="/assets/{script_name}.js"></script></head>
 <body><a class="skip" href="#main">Skip to content</a><div class="offline-bar" id="offline" hidden role="status">Offline shell · verification and evidence access paused</div><header class="topbar"><a class="brand" href="/checkpoint"><img src="/icons/logo.svg" alt=""><span>VERITAS<small>VAULT SECURITY SYSTEMS</small></span></a><nav class="nav" aria-label="Primary navigation">{nav}</nav><div class="top-actions"><span id="connection" class="connection" aria-label="Network status"></span><span id="operator" class="eyebrow"></span><button class="install quiet" data-install hidden>Install ↗</button><button id="signin">Operator sign-in</button><button id="signout" hidden>Sign out</button></div></header>
 <main id="main"><section class="hero compact-hero"><div><div class="eyebrow">{eyebrow}</div><h1>{title}<em>.</em></h1><p>{subtitle}</p></div></section><div id="notice" class="notice" role="status"></div>{content}</main>
