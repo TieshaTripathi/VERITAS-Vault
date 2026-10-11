@@ -207,15 +207,6 @@ def login(body: Credentials, request: Request, response: Response):
     uname = body.username.strip().casefold()
     pwd = body.password
 
-    # Check monitor role account
-    monitor_hash = os.environ.get("VAULT_MONITOR_PASSWORD_HASH", "")
-    is_monitor_user = uname in ("monitor", "monitor@veritas-vault.internal")
-    monitor_pw_valid = (
-        check_password(pwd, monitor_hash)
-        if monitor_hash
-        else (pwd in ("monitor", "monitor-password", "vault-monitor-password"))
-    )
-
     # Check operator/admin account
     admin_hash = os.environ.get("VAULT_OPERATOR_PASSWORD_HASH", "")
     admin_uname = os.environ.get("VAULT_OPERATOR_USERNAME", "admin").casefold()
@@ -225,9 +216,7 @@ def login(body: Credentials, request: Request, response: Response):
             and (pwd in ("test-only-password-strong", "vault-operator-password") or (admin_hash and check_password(pwd, admin_hash))))
     )
 
-    if is_monitor_user and monitor_pw_valid:
-        saved = {"id": "local-monitor", "name": body.username, "role": "monitor", "expires": time.time() + 3600}
-    elif is_admin_user:
+    if is_admin_user:
         saved = {"id": "local-admin", "name": body.username, "role": "admin", "expires": time.time() + 3600}
     elif store.cloud:
         # 2. Attempt Supabase Cloud Auth if configured
@@ -1106,7 +1095,7 @@ def subscribe(body: Subscription, user=Depends(monitor_or_above)):
                 "auth": body.keys["auth"],
                 "device_label": body.device_label or "Web Device",
                 "enabled": True,
-            }, headers={"Prefer": "resolution=merge-duplicates"})
+            }, params={"on_conflict": "endpoint"}, headers={"Prefer": "resolution=merge-duplicates"})
         except Exception as exc:
             import logging
             logging.getLogger("vault.api").warning("Failed to record push subscription in Supabase: %s", exc)
@@ -1173,7 +1162,7 @@ def register_fcm_token(body: FCMTokenRegistration, user=Depends(monitor_or_above
                 "auth": "fcm_token",
                 "device_label": body.device_label or "Mobile Monitor Phone",
                 "enabled": True,
-            }, headers={"Prefer": "resolution=merge-duplicates"})
+            }, params={"on_conflict": "endpoint"}, headers={"Prefer": "resolution=merge-duplicates"})
         except Exception as exc:
             logger.warning("Failed to record FCM token in Supabase: %s", exc)
     return {"registered": True, "provider": "FCM", "device_label": body.device_label}

@@ -14,9 +14,52 @@ def monitor_client(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "ROOT", tmp_path)
     return TestClient(backend.app, base_url="https://veritas-vault14.web.app", headers={"X-Vault-Request": "1", "Origin": "https://veritas-vault14.web.app"})
 
-def test_monitor_role_read_only_and_bearer_auth(monitor_client):
-    # 1. Sign in as monitor
-    login_res = monitor_client.post("/api/auth/login", json={"username": "monitor", "password": "monitor"})
+def test_monitor_role_read_only_and_bearer_auth(monitor_client, monkeypatch):
+    # 1. Production fallback monitor account is removed/disabled and rejected
+    fallback_res = monitor_client.post("/api/auth/login", json={"username": "monitor", "password": "monitor"})
+    assert fallback_res.status_code == 401
+
+    # 2. Authenticate Supabase user with vault_role = "monitor"
+    _db = {}
+    class MockSupabaseCloud:
+        def request(self, method, path, **kwargs):
+            if "rpc/vault_commit" in path:
+                json_data = kwargs.get("json", {})
+                _db[json_data.get("record_id")] = json_data.get("new_payload")
+                class RpcResp:
+                    def json(self):
+                        return True
+                return RpcResp()
+            class MockResp:
+                def json(self):
+                    return {
+                        "user": {
+                            "id": "supabase-monitor-uuid-1234",
+                            "app_metadata": {"vault_role": "monitor"},
+                        },
+                        "access_token": "mock-supabase-jwt-token",
+                        "expires_in": 3600,
+                    }
+            return MockResp()
+
+        def rows(self, table, **params):
+            id_val = params.get("id", "").replace("eq.", "")
+            if id_val in _db:
+                return [{"payload": _db[id_val], "version": 1}]
+            return []
+
+        def cas(self, key, ver, payload, *args, **kwargs):
+            _db[key] = payload
+            return True
+
+        def put(self, key, payload):
+            _db[key] = payload
+
+    test_store = Store()
+    test_store.cloud = MockSupabaseCloud()
+    monkeypatch.setattr(backend, "Store", lambda: test_store)
+
+    login_res = monitor_client.post("/api/auth/login", json={"username": "monitor@example.com", "password": "secure-monitor-pass"})
     assert login_res.status_code == 200, login_res.text
     login_data = login_res.json()
     assert login_data["role"] == "monitor"
@@ -58,6 +101,14 @@ def test_monitor_role_read_only_and_bearer_auth(monitor_client):
     assert fcm_res.status_code == 200
     assert fcm_res.json()["registered"] is True
     assert fcm_res.json()["provider"] == "FCM"
+
+    # Repeated registration (simulating PWA restart on same device) is idempotent
+    fcm_restart_res = no_cookie_client.post("/api/fcm/register", json={
+        "fcm_token": "fcm_test_token_mobile_monitor_device_12345",
+        "device_label": "iPhone 15 Mobile PWA"
+    })
+    assert fcm_restart_res.status_code == 200
+    assert fcm_restart_res.json()["registered"] is True
 
     # 5. Verify monitor CANNOT modify system state (403 Forbidden)
     reset_chk_res = no_cookie_client.post("/api/checkpoint/reset", json={"mode": "standard"})
