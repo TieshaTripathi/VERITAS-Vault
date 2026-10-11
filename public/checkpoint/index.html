@@ -20,7 +20,7 @@
   <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div>
   <div class="stat"><span class="stat-label">SCANNER</span><strong id="scanner-status">STANDBY</strong></div>
   <div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">NO FACE</strong></div>
-  <div class="stat"><span class="stat-label">TELEGRAM</span><strong id="telegram-status">READY</strong></div>
+  <div class="stat"><span class="stat-label">PUSH</span><strong id="push-status">READY</strong></div>
   <div class="stat"><span class="stat-label">ALARM</span><strong id="alarm-status">SILENT</strong></div>
 </div>
 <details class="diagnostics-panel" id="diagnostics-panel">
@@ -31,7 +31,6 @@
       <div class="diag-actions">
         <button type="button" id="btn-test-siren" class="quiet">Test Siren 🔊</button>
         <button type="button" id="toggle-mute" class="quiet">Siren On</button>
-        <button type="button" id="btn-test-telegram" class="quiet">Test Telegram ✈️</button>
       </div>
     </div>
     <div class="diag-group" id="diag-biometrics" style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
@@ -102,7 +101,7 @@
     <div class="bm-actions">
       <a href="/audit" id="bm-btn-view" class="bm-btn bm-btn-evidence">VIEW EVIDENCE 👁</a>
       <button type="button" id="bm-btn-ack" class="bm-btn bm-btn-ack">ACKNOWLEDGE ALERT</button>
-      <button type="button" id="bm-btn-reset" class="bm-btn bm-btn-reset" hidden>RESET CHECKPOINT</button>
+      <button type="button" id="bm-btn-reset" class="bm-btn bm-btn-reset">RESET CHECKPOINT</button>
     </div>
   </div>
 </dialog>

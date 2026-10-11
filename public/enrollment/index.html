@@ -8,6 +8,7 @@
     <div class="camera-meta"><span>ENCRYPTED INGESTION</span><span>640 × 480 / LOCAL PREVIEW</span></div></div>
 <div class="camera-controls">
   <button class="primary" id="start-camera">Start enrollment camera</button>
+  <button type="button" class="quiet" id="stop-camera" disabled>Stop Camera</button>
   <button type="button" id="capture-sample-btn" class="button" style="background:var(--cyan,#00e5ff);color:#0b0f19;font-weight:700;cursor:pointer" disabled>Capture Sample (1/5)</button>
   <button type="button" id="reset-samples-btn" class="button" style="display:none;cursor:pointer">Reset Samples</button>
 </div>
@@ -29,8 +30,9 @@
 <section class="panel"><div class="panel-head"><h2 class="section-label">ENROLLED PERSONNEL</h2></div><div id="personnel-list" class="muted">Sign in as an administrator to view the registry.</div></section>
 <section class="panel danger-zone-panel" id="danger-zone-panel" hidden><div class="panel-head"><h2 class="section-label" style="color:var(--red,#ef4444)">ADVANCED / DANGER ZONE</h2><span class="badge" style="background:rgba(239,68,68,0.2);color:#ef4444;border-color:rgba(239,68,68,0.4)">ADMIN ONLY</span></div>
 <p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Irreversible administrative actions for biometric enrollment baselines. Access audit logs and forensic evidence are strictly preserved.</p>
-<div class="danger-zone-actions">
-  <button type="button" id="btn-reset-enrollments" class="button" style="background:#ef4444;color:#fff;border-color:#ef4444;font-weight:600">RESET ALL ENROLLMENTS</button>
+<div class="danger-zone-actions" style="display:flex;gap:10px;flex-wrap:wrap;">
+  <button type="button" id="btn-reset-enrollments" class="button" style="background:transparent;color:#ef4444;border-color:#ef4444;font-weight:600">RESET ALL ENROLLMENTS</button>
+  <button type="button" id="btn-reset-demo" class="button" style="background:#ef4444;color:#fff;border-color:#ef4444;font-weight:700">RESET DEMO ENVIRONMENT</button>
 </div>
 </section>
 </div></div></main>

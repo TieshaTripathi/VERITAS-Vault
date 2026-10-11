@@ -22,13 +22,11 @@ import {
   getActiveAlert,
   clearActiveAlert,
   testSiren,
-  testTelegram,
-  getAlertsStatus,
+  shownBreachIds,
   CRITICAL_REASON_CODES,
 } from "./alerts.js";
 
-// Scanner runtime constants & state
-const SCAN_INTERVAL = 1200; // 1200ms recognition interval for optimal performance
+const SCAN_INTERVAL = 1100; // 1100ms scan interval
 let stopCamera = null;
 let loop = null;
 let busy = false; // Strict scan lock: only one recognition request at a time
@@ -41,14 +39,10 @@ let trackCounter = 1;
 let tracks = [];
 let cameraStarting = false;
 
-// Anti-replay session caching (Phase 5)
+// Anti-replay session caching
 let activeSession = null;
 let activeSessionExpiresAt = 0;
 let frameSequence = 0;
-
-// Single breach popup tracking (Phase 8: one event ID -> one modal)
-const shownEventIds = new Set();
-let telegramConfigured = false;
 
 const video = $("#camera");
 const canvas = $("#hud-overlay");
@@ -599,11 +593,21 @@ function updateTelemetry() {
     alarmStatusEl.style.color = alarmColor;
   }
 
-  const tgStatusEl = $("#telegram-status");
-  if (tgStatusEl) {
-    const isBreach = alert && state === "BREACH";
-    tgStatusEl.textContent = isBreach ? "DISPATCHED" : telegramConfigured ? "READY" : "NOT CONFIGURED";
-    tgStatusEl.style.color = isBreach ? "var(--red)" : telegramConfigured ? "var(--green)" : "#91a5bc";
+  const pushStatusEl = $("#push-status");
+  if (pushStatusEl) {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      pushStatusEl.textContent = "UNSUPPORTED";
+      pushStatusEl.style.color = "#91a5bc";
+    } else if (Notification.permission === "granted") {
+      pushStatusEl.textContent = "ACTIVE";
+      pushStatusEl.style.color = "var(--green)";
+    } else if (Notification.permission === "denied") {
+      pushStatusEl.textContent = "BLOCKED";
+      pushStatusEl.style.color = "var(--red)";
+    } else {
+      pushStatusEl.textContent = "READY";
+      pushStatusEl.style.color = "var(--cyan)";
+    }
   }
 
   updateMuteButton();
@@ -624,8 +628,6 @@ function updateMuteButton() {
 
 export function showBreachModal(alert) {
   if (!alert || !alert.id) return;
-  if (shownEventIds.has(alert.id)) return;
-  shownEventIds.add(alert.id);
 
   const modal = $("#breach-modal");
   if (!modal || typeof modal.showModal !== "function") return;
@@ -857,7 +859,7 @@ async function scan() {
    ========================================================= */
 
 async function resetCheckpoint() {
-  shownEventIds.clear();
+  shownBreachIds.clear();
   clearActiveAlert();
   manuallyStopped = false;
 
@@ -892,7 +894,7 @@ function onAcknowledgeAlert() {
 $("#start-camera")?.addEventListener("click", () =>
   action($("#start-camera"), async () => {
     // 1. Reset any stale previous session to STANDBY
-    shownEventIds.clear();
+    shownBreachIds.clear();
     clearActiveAlert();
     const modal = $("#breach-modal");
     if (modal && modal.open) {
@@ -923,24 +925,6 @@ $("#btn-test-siren")?.addEventListener("click", () => {
   testSiren();
   toast("Alarm siren test active (2s).");
   updateTelemetry();
-});
-
-$("#btn-test-telegram")?.addEventListener("click", async () => {
-  const btn = $("#btn-test-telegram");
-  if (btn) btn.disabled = true;
-  try {
-    const res = await testTelegram();
-    if (res.ok) {
-      toast("Telegram test alert dispatched successfully (text + photo).");
-    } else {
-      toast(res.error || "Telegram alert failed. Configure Render environment variables.");
-    }
-  } catch (err) {
-    toast(err.message || "Telegram test failed.");
-  } finally {
-    if (btn) btn.disabled = false;
-    updateTelemetry();
-  }
 });
 
 $("#toggle-mute")?.addEventListener("click", () => {
@@ -996,20 +980,15 @@ setInterval(() => {
   }
 }, 100);
 
-// Load Telegram configured status ONCE on startup
-async function loadTelegramStatus() {
-  try {
-    const res = await getAlertsStatus();
-    telegramConfigured = Boolean(res?.telegram_configured);
-    updateTelemetry();
-  } catch {}
-}
+document.addEventListener("vault-push-changed", () => {
+  updateTelemetry();
+});
 
 document.addEventListener("vault-auth", async () => {
   manuallyStopped = false;
   initAudio();
   setStartupStatus("AUTHENTICATED");
-  await loadTelegramStatus();
+  updateTelemetry();
   try {
     display(await post("/checkpoint/tick"));
   } catch {}
@@ -1018,11 +997,11 @@ document.addEventListener("vault-auth", async () => {
 
 if (currentUser) {
   setStartupStatus("AUTHENTICATED");
-  loadTelegramStatus();
+  updateTelemetry();
   post("/checkpoint/tick").then(display).catch(() => {});
   setTimeout(() => beginSurveillance(), 150);
 } else {
-  loadTelegramStatus();
+  updateTelemetry();
   post("/checkpoint/tick").then(display).catch(() => {});
 }
 

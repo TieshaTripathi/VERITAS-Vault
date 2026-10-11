@@ -474,6 +474,45 @@ def reset_all_personnel(user=Depends(admin)):
     return {"deleted": deleted}
 
 
+@app.post("/api/admin/reset-demo")
+def reset_demo_environment(user=Depends(admin)):
+    """Admin-only action: RESET DEMO ENVIRONMENT.
+    Clears:
+    - all enrolled test personnel
+    - biometric template cache
+    - active checkpoint state (reset to STANDBY)
+    - active incidents
+    - pending alert jobs
+    - old push subscriptions
+    - stale capture sessions
+    Preserves:
+    - application source code
+    - encryption keys
+    - Supabase schema
+    - audit-log structure & ledger
+    - system configuration
+    """
+    rate_limit("reset_demo:" + user["id"], 5)
+    store = Store()
+    default_capture_manager.clear_all()
+    from src.pwa.vision import detector
+    detector.cache_clear()
+    from src.vision.biometric_service import default_biometric_service
+    default_biometric_service.invalidate_cache()
+    res = store.clear_demo_environment()
+    return {
+        "ok": True,
+        "state": "STANDBY",
+        "scanner": "STOPPED",
+        "camera": "STOPPED",
+        "enrolled_personnel_count": 0,
+        "alerts_cleared": True,
+        "active_incident": None,
+        "deleted_personnel": res.get("deleted_personnel", 0),
+        "message": "Demo environment reset successfully. Checkpoint is STANDBY, cache cleared."
+    }
+
+
 def transition(faces=None, evidence=None, key="checkpoint:main"):
     store = Store()
     for _ in range(8):
@@ -599,6 +638,9 @@ def get_or_create_incident(faces, reason_code="ZT-001"):
     return False, new_id
 
 
+_scan_lock = threading.Lock()
+
+
 @app.post("/api/checkpoint/frame")
 def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(operator)):
     rate_limit("scan:" + user["id"], 120)
@@ -606,11 +648,21 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
     current, _ = store.get("checkpoint:main")
     current = current or fresh()
 
+    # Drop old frame if a previous scan is still active — strictly ONE frame request at a time
+    if not _scan_lock.acquire(blocking=False):
+        res = dict(current)
+        res["dropped_frame"] = True
+        return res
+
     try:
+        from src.vision.biometric_service import default_biometric_service
+        people = store.personnel() if not default_biometric_service._cache_loaded else []
         frame, raw = decode(body.image)
-        faces, quality_report = recognize(frame, store.personnel())
+        faces, quality_report = recognize(frame, people)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    finally:
+        _scan_lock.release()
 
     now = time.time()
     frame_size = [int(frame.shape[1]), int(frame.shape[0])]

@@ -46,7 +46,7 @@ CHECKPOINT = f'''
   <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div>
   <div class="stat"><span class="stat-label">SCANNER</span><strong id="scanner-status">STANDBY</strong></div>
   <div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">NO FACE</strong></div>
-  <div class="stat"><span class="stat-label">TELEGRAM</span><strong id="telegram-status">READY</strong></div>
+  <div class="stat"><span class="stat-label">PUSH</span><strong id="push-status">READY</strong></div>
   <div class="stat"><span class="stat-label">ALARM</span><strong id="alarm-status">SILENT</strong></div>
 </div>
 <details class="diagnostics-panel" id="diagnostics-panel">
@@ -57,7 +57,6 @@ CHECKPOINT = f'''
       <div class="diag-actions">
         <button type="button" id="btn-test-siren" class="quiet">Test Siren 🔊</button>
         <button type="button" id="toggle-mute" class="quiet">Siren On</button>
-        <button type="button" id="btn-test-telegram" class="quiet">Test Telegram ✈️</button>
       </div>
     </div>
     <div class="diag-group" id="diag-biometrics" style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px;">
@@ -126,7 +125,7 @@ CHECKPOINT = f'''
     <div class="bm-actions">
       <a href="/audit" id="bm-btn-view" class="bm-btn bm-btn-evidence">VIEW EVIDENCE 👁</a>
       <button type="button" id="bm-btn-ack" class="bm-btn bm-btn-ack">ACKNOWLEDGE ALERT</button>
-      <button type="button" id="bm-btn-reset" class="bm-btn bm-btn-reset" hidden>RESET CHECKPOINT</button>
+      <button type="button" id="bm-btn-reset" class="bm-btn bm-btn-reset">RESET CHECKPOINT</button>
     </div>
   </div>
 </dialog>
@@ -136,6 +135,7 @@ ENROLLMENT = f'''
 <div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / MULTI-SAMPLE IDENTITY CAPTURE</h2><span class="badge">ADMIN ONLY</span></div>{camera(True)}
 <div class="camera-controls">
   <button class="primary" id="start-camera">Start enrollment camera</button>
+  <button type="button" class="quiet" id="stop-camera" disabled>Stop Camera</button>
   <button type="button" id="capture-sample-btn" class="button" style="background:var(--cyan,#00e5ff);color:#0b0f19;font-weight:700;cursor:pointer" disabled>Capture Sample (1/5)</button>
   <button type="button" id="reset-samples-btn" class="button" style="display:none;cursor:pointer">Reset Samples</button>
 </div>
@@ -157,8 +157,9 @@ ENROLLMENT = f'''
 <section class="panel"><div class="panel-head"><h2 class="section-label">ENROLLED PERSONNEL</h2></div><div id="personnel-list" class="muted">Sign in as an administrator to view the registry.</div></section>
 <section class="panel danger-zone-panel" id="danger-zone-panel" hidden><div class="panel-head"><h2 class="section-label" style="color:var(--red,#ef4444)">ADVANCED / DANGER ZONE</h2><span class="badge" style="background:rgba(239,68,68,0.2);color:#ef4444;border-color:rgba(239,68,68,0.4)">ADMIN ONLY</span></div>
 <p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Irreversible administrative actions for biometric enrollment baselines. Access audit logs and forensic evidence are strictly preserved.</p>
-<div class="danger-zone-actions">
-  <button type="button" id="btn-reset-enrollments" class="button" style="background:#ef4444;color:#fff;border-color:#ef4444;font-weight:600">RESET ALL ENROLLMENTS</button>
+<div class="danger-zone-actions" style="display:flex;gap:10px;flex-wrap:wrap;">
+  <button type="button" id="btn-reset-enrollments" class="button" style="background:transparent;color:#ef4444;border-color:#ef4444;font-weight:600">RESET ALL ENROLLMENTS</button>
+  <button type="button" id="btn-reset-demo" class="button" style="background:#ef4444;color:#fff;border-color:#ef4444;font-weight:700">RESET DEMO ENVIRONMENT</button>
 </div>
 </section>
 </div></div>'''
@@ -193,20 +194,28 @@ CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel
 <div class="sim-result" id="sim-result" role="status">Select a scenario to begin.</div>{dial('sim-timer')}<p class="callout">All results in this panel are synthetic. No biometric decisions, evidence records, or alerts are created.</p></section>
 <section class="panel"><div class="panel-head"><h2 class="section-label">SYSTEM HEALTH & READINESS</h2><span class="badge">ZERO TRUST</span></div><div class="config-grid">
   <div class="config-status">Storage<span id="storage-status">CONNECTED</span></div>
-  <div class="config-status">Audit<span id="audit-status">VERIFIED</span></div>
+  <div class="config-status">Audit Ledger<span id="audit-status">VERIFIED</span></div>
   <div class="config-status">Local Siren<span id="audio-status">READY</span></div>
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
 </div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section></div>
-<div class="stack"><section class="panel" id="telegram-panel"><div class="panel-head"><h2 class="section-label">TELEGRAM ALERTS</h2><span class="badge" id="control-telegram-badge">NOT CONFIGURED</span></div>
+<div class="stack"><section class="panel" id="push-panel"><div class="panel-head"><h2 class="section-label">PWA REMOTE ALERTS</h2><span class="badge" id="control-push-badge">NOT SUBSCRIBED</span></div>
 <div class="config-grid" style="margin-bottom:16px;">
-  <div class="config-status">Telegram Alerts<strong id="control-telegram-status" style="font-size:14px;">NOT CONFIGURED</strong></div>
-  <div class="config-status">Bot API<span id="control-bot-api">DISCONNECTED</span></div>
-  <div class="config-status">Last Telegram<span id="control-last-telegram">NEVER</span></div>
+  <div class="config-status">Web Push<strong id="control-push-status" style="font-size:14px;">STANDBY</strong></div>
+  <div class="config-status">Active Devices<span id="control-push-devices">0</span></div>
+  <div class="config-status">Permission<span id="control-push-perm">DEFAULT</span></div>
 </div>
-<div id="control-tg-notice" class="callout" style="display:none;margin-bottom:16px;">Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Render environment variables.</div>
-<div id="control-tg-error" class="alert-desc" style="display:none;color:#ef4444;font-size:12px;margin-bottom:14px;padding:8px 12px;background:rgba(239,68,68,0.1);border-left:3px solid #ef4444;border-radius:4px;"></div>
-<div class="form-actions"><button type="button" id="btn-test-tg-control" class="primary" style="width:100%;">TEST TELEGRAM ✈️</button></div>
-<p class="callout" style="margin-top:14px;">Credentials are managed exclusively via Render environment variables (<code>TELEGRAM_BOT_TOKEN</code> and <code>TELEGRAM_CHAT_ID</code>). Secrets are never accepted from or exposed to the browser.</p></section></div></div>'''
+<div class="form-actions" style="display:flex;gap:10px;flex-direction:column;">
+  <button type="button" id="btn-enable-push" class="primary" style="width:100%;">ENABLE SECURITY NOTIFICATIONS</button>
+  <button type="button" id="btn-test-push" class="quiet" style="width:100%;">TEST PWA PUSH 🔔</button>
+</div>
+<p class="callout" style="margin-top:14px;">Remote notifications are delivered exclusively via your installed VERITAS PWA. Instant alerts for confirmed breaches (ZT-001, ZT-002, ZT-008, ZT-009, ZT-013).</p></section>
+<section class="panel danger-zone-panel"><div class="panel-head"><h2 class="section-label" style="color:var(--red,#ef4444)">ADMINISTRATION / DANGER ZONE</h2><span class="badge" style="background:rgba(239,68,68,0.2);color:#ef4444;border-color:rgba(239,68,68,0.4)">ADMIN ONLY</span></div>
+<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Completely wipe enrolled test personnel, reset checkpoint state machine to STANDBY, flush template cache, and clear alert queues. Audit chain and forensic evidence are preserved.</p>
+<div class="danger-zone-actions">
+  <button type="button" id="btn-reset-demo" class="button" style="width:100%;background:#ef4444;color:#fff;border-color:#ef4444;font-weight:700">RESET DEMO ENVIRONMENT</button>
+</div>
+</section>
+</div></div>'''
 
 
 TITLES = {"checkpoint": ("SECURITY OPERATIONS / VAULT 01", "Live checkpoint", "Verify identities. Enforce dual custody. Seal every evidence trail."),

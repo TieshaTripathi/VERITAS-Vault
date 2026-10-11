@@ -1,4 +1,4 @@
-const CACHE = "veritas-shell-v3.0.0";
+const CACHE = "veritas-shell-v4.0.0";
 const SHELL = [
   "/checkpoint",
   "/enrollment",
@@ -19,9 +19,11 @@ const SHELL = [
   "/icons/icon-512.png",
   "/icons/logo.svg",
 ];
+
 self.addEventListener("install", (event) =>
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL))),
 );
+
 self.addEventListener("activate", (event) =>
   event.waitUntil(
     caches
@@ -29,13 +31,14 @@ self.addEventListener("activate", (event) =>
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key.startsWith("veritas-shell-") && key !== CACHE)
+            .filter((key) => key !== CACHE)
             .map((key) => caches.delete(key)),
         ),
       )
       .then(() => self.clients.claim()),
   ),
 );
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   // Explicit allowlist: never cache auth, API, evidence, photos, or external requests.
@@ -65,37 +68,71 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  // Push disabled in production UI; retained for offline/background event standards
   let payload = {};
   try {
     payload = event.data ? event.data.json() : {};
-  } catch (_) {}
-  const event_id = payload.event_id || "vault-alert";
-  const title = payload.title || "VERITAS Vault Notification";
-  if (self.registration && self.registration.showNotification && payload.active) {
-    event.waitUntil(
-      self.registration.showNotification(title, {
-        body: payload.body || "Security update",
-        tag: event_id,
-        data: payload,
-      }),
-    );
+  } catch (_) {
+    payload = { body: event.data ? event.data.text() : "Security update" };
+  }
+  const event_id = payload.event_id || payload.eventId || "";
+  const title = payload.title || "🚨 VERITAS SECURITY BREACH";
+  const body =
+    payload.body ||
+    "Unauthorized identity detected\nCheckpoint: CP-MAIN-01\nAccess: DENIED";
+  const targetUrl =
+    payload.url ||
+    (event_id ? `/audit?event=${encodeURIComponent(event_id)}` : "/audit");
+
+  const options = {
+    body: body,
+    icon: payload.icon || "/icons/icon-192.png",
+    badge: payload.badge || "/icons/icon-192.png",
+    tag: event_id || "vault-breach",
+    renotify: true,
+    requireInteraction: true,
+    data: {
+      event_id: event_id,
+      url: targetUrl,
+      ...payload,
+    },
+  };
+
+  if (self.registration && self.registration.showNotification) {
+    event.waitUntil(self.registration.showNotification(title, options));
   }
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const targetUrl =
+    event.notification.data && event.notification.data.url
+      ? event.notification.data.url
+      : event.notification.data && event.notification.data.event_id
+        ? `/audit?event=${encodeURIComponent(event.notification.data.event_id)}`
+        : "/audit";
+
   event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if (client.url.includes("/checkpoint") && "focus" in client) {
-          return client.focus();
+    clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clientList) => {
+        for (const client of clientList) {
+          if ("focus" in client) {
+            if (
+              client.url.includes("/audit") ||
+              client.url.includes("/checkpoint")
+            ) {
+              client.focus();
+              if ("navigate" in client && targetUrl) {
+                return client.navigate(targetUrl);
+              }
+              return client;
+            }
+          }
         }
-      }
-      if (clients.openWindow) {
-        return clients.openWindow("/checkpoint");
-      }
-    }),
+        if (clients.openWindow) {
+          return clients.openWindow(targetUrl);
+        }
+      }),
   );
 });
 

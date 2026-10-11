@@ -406,19 +406,44 @@ def deliver(key, job, version):
     delivered = set(job.get("delivered", []))
     errors = []
 
-    # Optional Push notifications
+    # Confirmed breach classification
+    is_non_breach = (
+        job.get("reason_code") in {"STANDBY", "ZT-007", "GRANTED", "RESET"}
+        or job.get("verdict") in {"STANDBY", "WAITING", "GRANTED", "RESET"}
+    )
+    is_critical_breach = (
+        job.get("reason_code") in CRITICAL_BREACH_CODES
+        or job.get("verdict") == "BREACH"
+        or (not is_non_breach and not job.get("reason_code"))
+    )
+
+    # Remote Alert: PWA Push Notifications (Active production channel)
     subscriptions = get_active_subscriptions(store)
     push_ready = bool(config["VAPID_PRIVATE_KEY"] and config["VAPID_PUBLIC_KEY"] and config["VAPID_SUBJECT"] and subscriptions)
-    if push_ready:
+    if push_ready and is_critical_breach and not is_non_breach:
         from pywebpush import webpush, WebPushException
         event_id = job.get("id", "")
+        reason_code = job.get("reason_code", "ZT-001")
+        cp_id = job.get("checkpoint", "CP-MAIN-01")
+        body_text = f"Unauthorized identity detected\nCheckpoint: {cp_id}\nAccess: DENIED"
+        if reason_code == "ZT-002":
+            body_text = f"Biometric spoof detected\nCheckpoint: {cp_id}\nAccess: DENIED"
+        elif reason_code == "ZT-008":
+            body_text = f"Custody timeout expired\nCheckpoint: {cp_id}\nAccess: DENIED"
+        elif reason_code == "ZT-009":
+            body_text = f"Replay attack detected\nCheckpoint: {cp_id}\nAccess: DENIED"
+        elif reason_code == "ZT-013":
+            body_text = f"Capture integrity violation\nCheckpoint: {cp_id}\nAccess: DENIED"
+
         push_payload = json.dumps({
-            "title": "VERITAS SECURITY ALERT",
-            "body": f"{job.get('reason') or 'Unregistered identity detected at CP-MAIN-01.'} Access remains locked.",
+            "title": "🚨 VERITAS SECURITY BREACH",
+            "body": body_text,
             "event_id": event_id,
-            "reason_code": job.get("reason_code", "ZT-001"),
+            "reason_code": reason_code,
+            "checkpoint": cp_id,
             "url": f"/audit?event={event_id}" if event_id else "/audit",
-            "tag": event_id or "vault-security-alert",
+            "tag": event_id or "vault-security-breach",
+            "active": True,
         })
         for sub_key, sub in subscriptions:
             if sub_key in delivered:
@@ -435,19 +460,8 @@ def deliver(key, job, version):
                     errors.append("push")
             except Exception:
                 errors.append("push")
-
-    # Telegram Alert Processing
+    # Optional Legacy Telegram Alert (if configured in environment)
     tg_cfg = get_telegram_config()
-    is_non_breach = (
-        job.get("reason_code") in {"STANDBY", "ZT-007", "GRANTED", "RESET"}
-        or job.get("verdict") in {"STANDBY", "WAITING", "GRANTED", "RESET"}
-    )
-    is_critical_breach = (
-        job.get("reason_code") in CRITICAL_BREACH_CODES
-        or job.get("verdict") == "BREACH"
-        or (not is_non_breach and not job.get("reason_code"))
-    )
-
     if tg_cfg["configured"] and is_critical_breach and "telegram" not in delivered:
         photo_bytes = None
         try:
@@ -490,13 +504,19 @@ def deliver(key, job, version):
             del photo_bytes
             photo_bytes = None
 
-    # Optional WhatsApp alerts
+    # FUTURE OPTIONAL INTEGRATION: WhatsApp notifications via business API
     whatsapp_ready = bool(config.get("CALLMEBOT_API_KEY") and config.get("CALLMEBOT_PHONE"))
     if whatsapp_ready and "whatsapp" not in delivered and not is_non_breach:
         try:
-            response = httpx.get("https://api.callmebot.com/whatsapp.php", params={
-                "phone": config["CALLMEBOT_PHONE"], "apikey": config["CALLMEBOT_API_KEY"],
-                "text": f"VERITAS security breach. Event {job.get('id', '')}. Review the secure audit ledger."}, timeout=10)
+            response = httpx.get(
+                "https://api.callmebot.com/whatsapp.php",
+                params={
+                    "phone": config["CALLMEBOT_PHONE"],
+                    "apikey": config["CALLMEBOT_API_KEY"],
+                    "text": f"VERITAS security breach. Event {job.get('id', '')}. Review the secure audit ledger.",
+                },
+                timeout=10,
+            )
             response.raise_for_status()
             if "error" in response.text.lower():
                 raise ValueError("Provider rejected the alert")

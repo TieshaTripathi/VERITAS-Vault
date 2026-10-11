@@ -64,6 +64,11 @@ class CaptureSessionManager:
         for nonce in expired_nonces:
             del self._used_nonces[nonce]
 
+    def clear_all(self):
+        """Purge all active sessions and used nonce history (reset demo environment)."""
+        self._active_sessions.clear()
+        self._used_nonces.clear()
+
     def register_device(self, device_id: str, checkpoint_id: str, secret: str, status: str = "ACTIVE"):
         """Register or update a trusted capture device."""
         self._trusted_devices[device_id] = {

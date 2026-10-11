@@ -1,13 +1,9 @@
-/**
- * VERITAS-Vault Audio Alarm and Local Security Alert Subsystem.
- * Performance-first, minimal architecture: Local siren, Telegram testing, and breach deduplication.
- */
 
-// Test compatibility stubs (Web Push disabled in production)
-export async function getPushSubscription() { return null; }
-export async function subscribePush() { return null; }
-export async function unsubscribePush() { return true; }
-export async function testPush() { return { sent: 0 }; }
+/**
+ * VERITAS-Vault Audio Alarm and PWA Push Remote Alerts Subsystem.
+ * Clean baseline: Web Audio siren, PWA Web Push notification lifecycle,
+ * and strict breach popup deduplication (one event ID = one popup).
+ */
 
 let audioCtx = null;
 let sirenOsc = null;
@@ -16,10 +12,17 @@ let sirenTimer = null;
 let autoStopTimer = null;
 let isAlarmSounding = false;
 let currentAlert = null;
-let lastNotifiedEventId = null;
-const notifiedEventIds = new Set();
 
+export const shownBreachIds = new Set();
+// Backward-compatibility alias for test suites
+export const notifiedEventIds = shownBreachIds;
+
+export const CRITICAL_REASON_CODES = ["ZT-001", "ZT-002", "ZT-008", "ZT-009", "ZT-013"];
 const STORAGE_KEY_MUTED = "vault_alarm_muted";
+
+/* =========================================================
+   AUDIO & SIREN ENGINE
+   ========================================================= */
 
 export function isMuted() {
   try {
@@ -64,8 +67,7 @@ export function getActiveAlert() {
 export function clearActiveAlert() {
   stopAlarm();
   currentAlert = null;
-  lastNotifiedEventId = null;
-  notifiedEventIds.clear();
+  shownBreachIds.clear();
   dispatchAlertEvent("vault-alert-cleared", null);
 }
 
@@ -84,8 +86,6 @@ export function startAlarm({ duration = 12000 } = {}) {
 
     sirenOsc.type = "sawtooth";
     sirenOsc.frequency.setValueAtTime(880, audioCtx.currentTime);
-
-    // Controlled volume — prominent without clipping
     sirenGain.gain.setValueAtTime(0.18, audioCtx.currentTime);
 
     sirenOsc.connect(sirenGain);
@@ -101,7 +101,6 @@ export function startAlarm({ duration = 12000 } = {}) {
       sirenOsc.frequency.setValueAtTime(targetFreq, audioCtx.currentTime);
     }, 250);
 
-    // Bounded siren duration (defaults to 12s)
     clearTimeout(autoStopTimer);
     autoStopTimer = setTimeout(() => {
       stopAlarm();
@@ -109,7 +108,7 @@ export function startAlarm({ duration = 12000 } = {}) {
 
     dispatchAlertEvent("vault-alarm-state", { active: true });
   } catch (err) {
-    console.warn("[alerts] Web Audio playback failed:", err);
+    console.warn("[alerts] Audio playback failed:", err);
     isAlarmSounding = false;
   }
 }
@@ -154,7 +153,7 @@ export function getAudioState() {
   if (isMuted()) return "SIREN MUTED";
   if (isAlarmSounding) return "SIREN SOUNDING";
   if (audioCtx && audioCtx.state === "running") return "SIREN READY";
-  if (audioCtx && audioCtx.state === "suspended") return "SIREN BLOCKED BY BROWSER";
+  if (audioCtx && audioCtx.state === "suspended") return "SIREN BLOCKED";
   return "SIREN READY";
 }
 
@@ -163,20 +162,112 @@ export function testSiren() {
   startAlarm({ duration: 2000 });
 }
 
-export async function testTelegram() {
-  return await post("/alerts/telegram/test", {});
+/* =========================================================
+   PWA WEB PUSH NOTIFICATION SUBSCRIPTION LIFECYCLE
+   ========================================================= */
+
+function urlB64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
 }
 
+export function isPushSupported() {
+  return typeof window !== "undefined" && "serviceWorker" in navigator && "PushManager" in window;
+}
+
+export async function getPushSubscription() {
+  if (!isPushSupported()) return null;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    return await reg.pushManager.getSubscription();
+  } catch {
+    return null;
+  }
+}
+
+export async function enablePushNotifications() {
+  if (!isPushSupported()) {
+    throw new Error("Push notifications are not supported in this browser.");
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") {
+    throw new Error("Push notification permission denied by user.");
+  }
+  const { api, post } = await import("./common.js");
+  const reg = await navigator.serviceWorker.ready;
+  const keyRes = await api("/push/public-key");
+  const pubKey = keyRes?.public_key;
+  if (!pubKey) {
+    throw new Error("VAPID public key unavailable from server.");
+  }
+
+  const sub = await reg.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlB64ToUint8Array(pubKey),
+  });
+
+  const subJson = sub.toJSON();
+  const isMobile = /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent);
+  await post("/push/subscribe", {
+    endpoint: sub.endpoint,
+    keys: {
+      p256dh: subJson.keys?.p256dh || "",
+      auth: subJson.keys?.auth || "",
+    },
+    device_label: isMobile ? "Mobile PWA Device" : "Desktop Operations Console",
+  });
+  dispatchAlertEvent("vault-push-changed", { subscribed: true });
+  return sub;
+}
+
+export async function disablePushNotifications() {
+  if (!isPushSupported()) return true;
+  try {
+    const { post } = await import("./common.js");
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await post("/push/unsubscribe", {
+        endpoint: sub.endpoint,
+        keys: { p256dh: "", auth: "" },
+      }).catch(() => {});
+      await sub.unsubscribe();
+    }
+    dispatchAlertEvent("vault-push-changed", { subscribed: false });
+    return true;
+  } catch (err) {
+    console.warn("Failed to unsubscribe push:", err);
+    return false;
+  }
+}
+
+export async function testPush() {
+  const { post } = await import("./common.js");
+  return await post("/push/test", {});
+}
+
+export const subscribePush = enablePushNotifications;
+
 export async function getAlertsStatus() {
+  const { api } = await import("./common.js");
   return await api("/alerts/status");
 }
 
-export const CRITICAL_REASON_CODES = ["ZT-001", "ZT-002", "ZT-008", "ZT-009", "ZT-013"];
+/* =========================================================
+   SECURITY BREACH EVALUATION & MODAL DEDUPLICATION
+   ========================================================= */
 
 /**
- * Event Severity Classifier:
- * - Critical only: ZT-001, ZT-002, ZT-008, ZT-009, ZT-013 -> siren, breach modal
- * - Non-alarm states: STANDBY, WAITING, GRANTED, RESET
+ * Evaluates checkpoint scan result cleanly.
+ * Strictly triggers modal and siren for confirmed breach codes only:
+ * ZT-001, ZT-002, ZT-008, ZT-009, ZT-013.
+ * One event ID = exactly one popup.
  */
 export function evaluateSecurityEvent(result) {
   if (!result || typeof result !== "object") return;
@@ -186,10 +277,10 @@ export function evaluateSecurityEvent(result) {
   const reason = result.reason || "";
   const isDuplicateFirst = Boolean(result.duplicate_first_party);
 
-  // Do NOT show breach popup for:
-  // STANDBY, WAITING, GRANTED, recognized duplicate first user, ZT-007, RESET
+  // Never show breach popup for non-breach states
   if (
     state === "STANDBY" ||
+    state === "VERIFYING" ||
     state === "WAITING" ||
     state === "GRANTED" ||
     state === "RESET" ||
@@ -205,8 +296,7 @@ export function evaluateSecurityEvent(result) {
     return;
   }
 
-  // Biometric recognition check:
-  // If all faces are is_recognized == true AND is_live == true: NO popup.
+  // If all faces are verified and live: no popup
   if (Array.isArray(result.faces) && result.faces.length > 0) {
     const allValid = result.faces.every((f) => f.is_recognized && f.is_live);
     if (allValid) {
@@ -224,14 +314,13 @@ export function evaluateSecurityEvent(result) {
   const hasSpoof = Array.isArray(result.faces) && result.faces.some((f) => !f.is_live);
   const hasUnrecognized = Array.isArray(result.faces) && result.faces.some((f) => !f.is_recognized);
 
-  // Critical failure identification
   let code = reasonCode;
   if (!code || code === "NONE") {
     if (hasSpoof || reason.toLowerCase().includes("spoof")) {
       code = "ZT-002";
-    } else if (hasUnrecognized || reason.toLowerCase().includes("unregistered") || reason.toLowerCase().includes("unauthorized") || reason.toLowerCase().includes("unknown")) {
+    } else if (hasUnrecognized || reason.toLowerCase().includes("unregistered") || reason.toLowerCase().includes("unknown")) {
       code = "ZT-001";
-    } else if (reason.toLowerCase().includes("expired") || reason.toLowerCase().includes("timeout")) {
+    } else if (reason.toLowerCase().includes("timeout") || reason.toLowerCase().includes("expired")) {
       code = "ZT-008";
     } else if (reason.toLowerCase().includes("replay")) {
       code = "ZT-009";
@@ -247,28 +336,21 @@ export function evaluateSecurityEvent(result) {
     return;
   }
 
-  // Event deduplication using event ID / last_event as unique key
+  // Single breach event ID deduplication: one event ID = one popup
   const eventId =
     result.last_event ||
     result.active_incident ||
     result.id ||
     (code ? `BREACH-${code}` : "BREACH-GENERIC");
 
-  if (notifiedEventIds.has(eventId)) {
+  if (shownBreachIds.has(eventId)) {
     if (currentAlert && currentAlert.id === eventId) {
       currentAlert.raw = result;
     }
     return;
   }
-  notifiedEventIds.add(eventId);
+  shownBreachIds.add(eventId);
 
-  // If incoming result has the SAME breach event ID as currentAlert.id: do not reopen
-  if (currentAlert && currentAlert.id === eventId) {
-    currentAlert.raw = result;
-    return;
-  }
-
-  // Only trigger a new alert when a new unique breach event ID appears
   const subtitle =
     code === "ZT-001"
       ? "UNAUTHORIZED PERSON DETECTED"
@@ -296,9 +378,7 @@ export function evaluateSecurityEvent(result) {
     raw: result,
   };
 
-  // Play Web Audio siren on new critical breach
   startAlarm({ duration: 15000 });
-
   dispatchAlertEvent("vault-critical-alert", currentAlert);
 }
 
@@ -308,7 +388,9 @@ function dispatchAlertEvent(name, detail) {
   } catch {}
 }
 
-// Global user interaction handler to prime audio context
-["click", "keydown", "touchstart"].forEach((evt) => {
-  window.addEventListener(evt, initAudio, { once: true, passive: true });
-});
+// Global user interaction listener to prime Web Audio context
+if (typeof window !== "undefined") {
+  ["click", "keydown", "touchstart"].forEach((evt) => {
+    window.addEventListener(evt, initAudio, { once: true, passive: true });
+  });
+}

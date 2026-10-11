@@ -11,7 +11,13 @@ import {
 import {
   initAudio,
   testSiren,
-  testTelegram,
+  enablePushNotifications,
+  disablePushNotifications,
+  getPushSubscription,
+  testPush,
+  isPushSupported,
+  clearActiveAlert,
+  shownBreachIds,
 } from "./alerts.js";
 
 let simulationTimer;
@@ -87,76 +93,99 @@ async function load() {
     if ($("#audio-status")) $("#audio-status").textContent = "READY";
     if ($("#audit-status")) $("#audit-status").textContent = result.audit_verified ? "VERIFIED" : "UNVERIFIED";
 
-    // Query Telegram diagnostic status
+    // Query PWA Push status
     try {
-      const tg = await api("/alerts/telegram/status");
-      const isConfigured = Boolean(tg.configured);
-      const tgStatusEl = $("#control-telegram-status");
-      const tgBadgeEl = $("#control-telegram-badge");
-      const botApiEl = $("#control-bot-api");
-      const lastTgEl = $("#control-last-telegram");
-      const noticeEl = $("#control-tg-notice");
-      const errorEl = $("#control-tg-error");
+      const sub = await getPushSubscription();
+      const statusEl = $("#control-push-status");
+      const badgeEl = $("#control-push-badge");
+      const devicesEl = $("#control-push-devices");
+      const permEl = $("#control-push-perm");
+      const enableBtn = $("#btn-enable-push");
 
-      if (tgStatusEl) {
-        tgStatusEl.textContent = isConfigured ? "CONFIGURED" : "NOT CONFIGURED";
-        tgStatusEl.style.color = isConfigured ? "var(--green)" : "#ef4444";
+      const perm = typeof Notification !== "undefined" ? Notification.permission : "unsupported";
+      if (permEl) permEl.textContent = perm.toUpperCase();
+
+      const isSubscribed = Boolean(sub);
+      if (statusEl) {
+        statusEl.textContent = isSubscribed ? "SUBSCRIBED" : "STANDBY";
+        statusEl.style.color = isSubscribed ? "var(--green)" : "#91a5bc";
       }
-      if (tgBadgeEl) {
-        tgBadgeEl.textContent = isConfigured ? "CONFIGURED" : "NOT CONFIGURED";
-        tgBadgeEl.className = isConfigured ? "badge" : "badge muted";
+      if (badgeEl) {
+        badgeEl.textContent = isSubscribed ? "ACTIVE" : "STANDBY";
+        badgeEl.className = isSubscribed ? "badge" : "badge muted";
       }
-      if (botApiEl) {
-        if (!isConfigured) {
-          botApiEl.textContent = "DISCONNECTED";
-          botApiEl.style.color = "#91a5bc";
-        } else if (tg.bot_reachable) {
-          botApiEl.textContent = "CONNECTED";
-          botApiEl.style.color = "var(--green)";
-        } else {
-          botApiEl.textContent = "DISCONNECTED";
-          botApiEl.style.color = "#ef4444";
-        }
+      if (devicesEl) {
+        devicesEl.textContent = String(result.subscriptions_count || (isSubscribed ? 1 : 0));
       }
-      if (lastTgEl) {
-        const lastSt = tg.last_telegram_status || "NEVER";
-        lastTgEl.textContent = lastSt;
-        lastTgEl.style.color = lastSt === "SENT" ? "var(--green)" : lastSt === "FAILED" ? "#ef4444" : "#91a5bc";
+      if (enableBtn) {
+        enableBtn.textContent = isSubscribed
+          ? "SECURITY NOTIFICATIONS ACTIVE ✓"
+          : "ENABLE SECURITY NOTIFICATIONS";
       }
-      if (noticeEl) {
-        noticeEl.style.display = isConfigured ? "none" : "block";
-      }
-      if (errorEl) {
-        if (isConfigured && tg.description && tg.description !== "CONNECTED") {
-          errorEl.textContent = `Telegram: ${tg.description}`;
-          errorEl.style.display = "block";
-        } else {
-          errorEl.style.display = "none";
-        }
-      }
-    } catch (tgErr) {
-      console.warn("Failed to retrieve Telegram diagnostic status:", tgErr);
+    } catch (pushErr) {
+      console.warn("Failed to retrieve push status:", pushErr);
     }
   } catch (error) {
     toast(error.message);
   }
 }
 
-$("#btn-test-tg-control")?.addEventListener("click", () =>
-  action($("#btn-test-tg-control"), async () => {
-    if (!currentUser || currentUser.role !== "admin") throw new Error("Sign in as admin to test Telegram.");
-    const res = await testTelegram();
-    if (res.ok) {
-      toast("Telegram test alert sent successfully (text and photo delivered).");
-    } else {
-      toast(res.error || "Telegram alert failed. Check Render environment variables.");
+$("#btn-enable-push")?.addEventListener("click", () =>
+  action($("#btn-enable-push"), async () => {
+    if (!currentUser) throw new Error("Sign in to enable push notifications.");
+    const existing = await getPushSubscription();
+    if (existing) {
+      toast("PWA Push notifications already active on this device.");
+      return;
     }
-    load();
+    await enablePushNotifications();
+    toast("Security notifications enabled for this PWA!");
+    await load();
+  }),
+);
+
+$("#btn-test-push")?.addEventListener("click", () =>
+  action($("#btn-test-push"), async () => {
+    if (!currentUser || currentUser.role !== "admin") throw new Error("Administrator sign-in required.");
+    const res = await testPush();
+    if (res.sent > 0) {
+      toast(`Test push delivered to ${res.sent} active device(s).`);
+    } else {
+      toast(res.error || "No active push subscriptions found. Click 'Enable Security Notifications' first.");
+    }
+    await load();
+  }),
+);
+
+$("#btn-reset-demo")?.addEventListener("click", () =>
+  action($("#btn-reset-demo"), async () => {
+    if (!currentUser || currentUser.role !== "admin") throw new Error("Administrator sign-in required.");
+    const ok = window.confirm(
+      "RESET DEMO ENVIRONMENT?\n\nThis will clear:\n- All enrolled test personnel\n- Biometric template cache\n- Active checkpoint state (reset to STANDBY)\n- Active incidents\n- Pending alert jobs\n- Old push subscriptions\n\nAudit chain ledger and forensic evidence will be preserved."
+    );
+    if (!ok) return;
+
+    try {
+      // Clear client state
+      clearActiveAlert();
+      shownBreachIds.clear();
+      try {
+        localStorage.removeItem("vault_alarm_muted");
+        sessionStorage.clear();
+      } catch {}
+
+      const res = await post("/admin/reset-demo", {});
+      toast("Demo environment reset: Checkpoint is STANDBY, cache cleared.");
+      await load();
+    } catch (err) {
+      toast(err.message || "Failed to reset demo environment.");
+    }
   }),
 );
 
 $("#btn-test-siren")?.addEventListener("click", () => {
   try {
+    initAudio();
     testSiren();
     toast("Test siren sounding for 2 seconds.");
   } catch (e) {
@@ -165,5 +194,6 @@ $("#btn-test-siren")?.addEventListener("click", () => {
 });
 
 document.addEventListener("vault-auth", load);
+document.addEventListener("vault-push-changed", load);
 load();
 addEventListener("pagehide", () => clearInterval(simulationTimer));

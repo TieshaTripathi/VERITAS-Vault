@@ -9,6 +9,7 @@ import {
   startCamera,
   snapshot,
 } from "./common.js";
+import { clearActiveAlert, shownBreachIds } from "./alerts.js";
 
 const STEPS = [
   "LOOK STRAIGHT",
@@ -21,8 +22,7 @@ const STEPS = [
 let stopCamera,
   timer,
   busy = false,
-  qualityOK = false,
-  currentStepIndex = 0;
+  qualityOK = false;
 
 const collectedSamples = [];
 const video = $("#camera");
@@ -32,6 +32,8 @@ function stop() {
   stopCamera = null;
   clearInterval(timer);
   qualityOK = false;
+  if ($("#start-camera")) $("#start-camera").disabled = false;
+  if ($("#stop-camera")) $("#stop-camera").disabled = true;
   updateUI();
 }
 
@@ -64,7 +66,7 @@ function updateUI() {
     if (guidance) {
       guidance.textContent = qualityOK
         ? `Ready! Click "Capture Sample" for: ${stepName}`
-        : `Please adjust pose: ${stepName}`;
+        : `Please align face in reticle: ${stepName}`;
     }
     if (captureBtn) {
       captureBtn.disabled = !qualityOK || !stopCamera;
@@ -75,15 +77,15 @@ function updateUI() {
     }
   } else {
     if (stepLabel) {
-      stepLabel.textContent = "5/5 SAMPLES COLLECTED ✓";
+      stepLabel.textContent = "ENROLLMENT COMPLETE (5/5 SAMPLES) ✓";
       stepLabel.style.color = "var(--green)";
     }
     if (guidance) {
-      guidance.textContent = "Multi-sample capture complete! Fill in personnel details and submit enrollment.";
+      guidance.textContent = "Multi-sample capture complete! Review personnel details and submit enrollment.";
     }
     if (captureBtn) {
       captureBtn.disabled = true;
-      captureBtn.textContent = "All Samples Captured ✓";
+      captureBtn.textContent = "ENROLLMENT COMPLETE ✓";
     }
     if (submitBtn) {
       submitBtn.disabled = false;
@@ -140,9 +142,19 @@ if (startCameraBtn) {
       }
       stop();
       stopCamera = await startCamera(video, $("#camera-empty"));
+      if ($("#stop-camera")) $("#stop-camera").disabled = false;
+      startCameraBtn.disabled = true;
       timer = setInterval(checkQuality, 1000);
       await checkQuality();
     });
+}
+
+const stopCameraBtn = $("#stop-camera");
+if (stopCameraBtn) {
+  stopCameraBtn.onclick = () => {
+    stop();
+    toast("Enrollment camera stopped.");
+  };
 }
 
 const captureBtn = $("#capture-sample-btn");
@@ -237,6 +249,32 @@ if (btnResetEnrollments) {
       toast(err.message || "Failed to reset enrollments.");
     } finally {
       btnResetEnrollments.disabled = false;
+    }
+  };
+}
+
+const btnResetDemo = $("#btn-reset-demo");
+if (btnResetDemo) {
+  btnResetDemo.onclick = async () => {
+    if (currentUser?.role !== "admin") return;
+    const ok = window.confirm(
+      "RESET DEMO ENVIRONMENT?\n\nThis will clear:\n- All enrolled test personnel\n- Biometric template cache\n- Active checkpoint state (reset to STANDBY)\n- Active incidents\n- Pending alert jobs\n- Old push subscriptions\n\nAudit chain ledger and forensic evidence will be preserved."
+    );
+    if (!ok) return;
+    try {
+      stop();
+      clearActiveAlert();
+      shownBreachIds.clear();
+      btnResetDemo.disabled = true;
+      await post("/admin/reset-demo", {});
+      toast("Demo environment reset to clean baseline.");
+      await loadPeople();
+      const list = $("#personnel-list");
+      if (list) list.textContent = "No personnel enrolled.";
+    } catch (err) {
+      toast(err.message || "Failed to reset demo environment.");
+    } finally {
+      btnResetDemo.disabled = false;
     }
   };
 }

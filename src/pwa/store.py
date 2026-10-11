@@ -232,3 +232,60 @@ class Store:
                 count = max(count, cur.rowcount)
         return count
 
+    def clear_demo_environment(self) -> dict:
+        """Admin action: resets demo environment cleanly.
+        Clears:
+        - All enrolled test personnel & baselines
+        - Active checkpoint state (reset to STANDBY)
+        - Active incidents
+        - Pending alert jobs
+        - Old push subscriptions
+        - Pending enrollment requests
+        Preserves strictly: source code, encryption keys, schema, audit log ledger, and evidence.
+        """
+        deleted_personnel = self.clear_personnel()
+
+        # Reset checkpoint to fresh STANDBY
+        self.put("checkpoint:main", {
+            "state": "STANDBY",
+            "mode": "standard",
+            "deadline": None,
+            "parties": [],
+            "reason": "Demo environment reset · Standby",
+            "seen": [],
+            "last_event": None
+        })
+
+        # Clear active incident
+        self.put("incident:active", None)
+
+        # Clear alert jobs, push subscriptions, and enrollment requests locally
+        with self.db() as conn:
+            conn.execute("DELETE FROM records WHERE id LIKE 'job:%' OR id LIKE 'push:%' OR id LIKE 'rate:%'")
+            conn.execute("DELETE FROM enrollment_requests")
+
+        # In cloud Supabase
+        if self.cloud:
+            try:
+                self.cloud.request("DELETE", "/rest/v1/vault_records?id=like.job:*")
+            except Exception:
+                pass
+            try:
+                self.cloud.request("DELETE", "/rest/v1/vault_records?id=like.push:*")
+            except Exception:
+                pass
+            try:
+                self.cloud.request("PATCH", "/rest/v1/push_subscriptions?enabled=eq.true", json={"enabled": False})
+            except Exception:
+                pass
+            try:
+                self.cloud.request("DELETE", "/rest/v1/enrollment_requests?id=not.is.null")
+            except Exception:
+                pass
+
+        return {
+            "deleted_personnel": deleted_personnel,
+            "checkpoint_state": "STANDBY",
+            "active_incident": None,
+        }
+
