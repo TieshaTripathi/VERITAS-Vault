@@ -123,3 +123,13 @@ def test_monitor_role_read_only_and_bearer_auth(monitor_client, monkeypatch):
 
     clear_personnel_res = no_cookie_client.delete("/api/personnel")
     assert clear_personnel_res.status_code == 403
+
+    # 6. Verify health check commit reporting
+    health_res = no_cookie_client.get("/api/health")
+    assert health_res.status_code == 200
+    assert len(health_res.json()["commit"]) > 0
+
+    # 7. Verify single log retrieval for monitor deep-link
+    fake_ev_id = "00000000-0000-0000-0000-000000000001"
+    not_found_res = no_cookie_client.get(f"/api/logs/{fake_ev_id}")
+    assert not_found_res.status_code == 404

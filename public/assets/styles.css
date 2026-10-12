@@ -1814,9 +1814,18 @@ body.monitor-mode .nav a[href="/control"] {
   display: none !important;
 }
 
+body.monitor-mode #camera-controls-bar,
+body.mobile-pwa #camera-controls-bar,
 body.monitor-mode #btn-checkpoint-reset,
+body.mobile-pwa #btn-checkpoint-reset,
+body.monitor-mode #reset,
+body.mobile-pwa #reset,
+body.monitor-mode #bm-btn-reset,
+body.mobile-pwa #bm-btn-reset,
 body.monitor-mode #diagnostics-panel,
-body.monitor-mode .danger-zone-panel {
+body.mobile-pwa #diagnostics-panel,
+body.monitor-mode .danger-zone-panel,
+body.mobile-pwa .danger-zone-panel {
   display: none !important;
 }
 

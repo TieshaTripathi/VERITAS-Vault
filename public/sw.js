@@ -1,4 +1,4 @@
-const CACHE = "veritas-shell-v4.0.0";
+const CACHE = "veritas-shell-v4.1.0";
 const SHELL = [
   "/checkpoint",
   "/enrollment",

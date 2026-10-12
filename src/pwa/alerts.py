@@ -504,7 +504,7 @@ def deliver(key, job, version):
             del photo_bytes
             photo_bytes = None
 
-    # FUTURE OPTIONAL INTEGRATION: WhatsApp notifications via business API
+    # Optional legacy fallback: WhatsApp notifications via callmebot
     whatsapp_ready = bool(config.get("CALLMEBOT_API_KEY") and config.get("CALLMEBOT_PHONE"))
     if whatsapp_ready and "whatsapp" not in delivered and not is_non_breach:
         try:

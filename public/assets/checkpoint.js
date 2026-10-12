@@ -773,6 +773,84 @@ export async function beginSurveillance({ manual = false } = {}) {
   }
 }
 
+export function setCameraOffUI() {
+  state = "STANDBY";
+  end = 0;
+  clearTracks();
+
+  const hud = getHudStatus();
+  if (hud) {
+    hud.textContent = "CAMERA STOPPED";
+    hud.style.borderColor = "var(--line, #1f293d)";
+    hud.style.color = "#91a5bc";
+  }
+
+  const verdictEl = $("#verdict");
+  if (verdictEl) {
+    verdictEl.textContent = "CHECKPOINT INACTIVE";
+  }
+
+  const feedState = $("#feed-state");
+  if (feedState) {
+    feedState.textContent = "INACTIVE";
+  }
+
+  document.documentElement.style.setProperty("--state", "#91a5bc");
+
+  // Reset party cards to inactive/awaiting
+  for (let i = 0; i < 2; i++) {
+    const node = $("#party-" + i);
+    if (node) {
+      node.classList.remove("verified");
+      const av = $(".avatar", node);
+      if (av) av.textContent = String(i + 1);
+      const str = $("strong", node);
+      if (str) str.textContent = "Awaiting identity";
+      const sm = $("small", node);
+      if (sm) {
+        sm.textContent = i === 0 ? "Primary officer / customer" : "Second distinct party";
+      }
+    }
+  }
+
+  // Reset timer ring and instructions
+  ring($("#timer"), "STANDBY", 15.0, 15);
+  const timerTitle = $("#timer-title");
+  if (timerTitle) timerTitle.textContent = "Ready to verify";
+  const deadlineNote = $("#deadline-note");
+  if (deadlineNote) deadlineNote.textContent = "The first verified identity starts the 15-second server-enforced clock.";
+  const waitCard = $("#waiting-instruction-card");
+  if (waitCard) waitCard.hidden = true;
+
+  // Clear modal and alarm
+  stopAlarm();
+  const modal = $("#breach-modal");
+  if (modal && modal.open) {
+    try { modal.close(); } catch {}
+  }
+
+  // Clear diagnostic biometrics
+  const trkEl = $("#diag-track");
+  if (trkEl) trkEl.textContent = "—";
+  const candEl = $("#diag-candidate");
+  if (candEl) candEl.textContent = "—";
+  const simEl = $("#diag-similarity");
+  if (simEl) simEl.textContent = "—";
+  const recStateEl = $("#diag-rec-state");
+  if (recStateEl) {
+    recStateEl.textContent = "STANDBY";
+    recStateEl.style.color = "#91a5bc";
+  }
+  const consEl = $("#diag-consensus");
+  if (consEl) consEl.textContent = "—";
+  const padEl = $("#diag-pad");
+  if (padEl) padEl.textContent = "—";
+  const latEl = $("#diag-total-ms");
+  if (latEl) latEl.textContent = "—";
+
+  updateTelemetry();
+}
+
 function onStopCamera() {
   manuallyStopped = true;
   stop();
@@ -794,11 +872,7 @@ function stop() {
   if ($("#start-camera")) $("#start-camera").disabled = false;
   if ($("#stop-camera")) $("#stop-camera").disabled = true;
 
-  updateTelemetry();
-  const hud = getHudStatus();
-  if (hud && state !== "BREACH" && state !== "GRANTED") {
-    hud.textContent = "CAMERA STOPPED · SCANNER PAUSED";
-  }
+  setCameraOffUI();
 }
 
 /* =========================================================
@@ -1001,6 +1075,9 @@ document.addEventListener("vault-alert-cleared", () => {
 
 // Single countdown timer tick (100ms) for smooth dial ring
 setInterval(() => {
+  if (!stopCamera) {
+    return;
+  }
   if (state === "WAITING") {
     const remaining = Math.max(0, (end - performance.now()) / 1000);
     const remText = remaining.toFixed(1) + "s remaining";
@@ -1016,9 +1093,21 @@ setInterval(() => {
       post("/checkpoint/tick").then(display).catch(() => {});
     }
   } else {
-    ring($("#timer"), state, state === "STANDBY" ? 15 : 0, 15);
+    ring($("#timer"), state, state === "STANDBY" ? 15.0 : 0, 15);
   }
 }, 100);
+
+let monitorInterval = null;
+function initMonitorPolling() {
+  if (currentUser?.role === "monitor" && !monitorInterval) {
+    monitorInterval = setInterval(async () => {
+      try {
+        const live = await api("/checkpoint/status");
+        display(live);
+      } catch {}
+    }, 2000);
+  }
+}
 
 document.addEventListener("vault-push-changed", () => {
   updateTelemetry();
@@ -1028,21 +1117,21 @@ document.addEventListener("vault-auth", async () => {
   manuallyStopped = false;
   initAudio();
   setStartupStatus("AUTHENTICATED");
-  updateTelemetry();
-  try {
-    display(await post("/checkpoint/tick"));
-  } catch {}
-  setTimeout(() => beginSurveillance(), 150);
+  if (currentUser?.role === "monitor") {
+    initMonitorPolling();
+    try {
+      display(await api("/checkpoint/status"));
+    } catch {}
+  } else {
+    setCameraOffUI();
+  }
 });
 
-if (currentUser) {
-  setStartupStatus("AUTHENTICATED");
-  updateTelemetry();
-  post("/checkpoint/tick").then(display).catch(() => {});
-  setTimeout(() => beginSurveillance(), 150);
+if (currentUser?.role === "monitor") {
+  initMonitorPolling();
+  api("/checkpoint/status").then(display).catch(() => {});
 } else {
-  updateTelemetry();
-  post("/checkpoint/tick").then(display).catch(() => {});
+  setCameraOffUI();
 }
 
 addEventListener("pagehide", stop);

@@ -31,8 +31,8 @@ def camera(enrollment=False):
 
 
 CHECKPOINT = f'''
-<div class="status-banner" id="verdict" role="status">LOCKED · AUTHENTICATE TO BEGIN VERIFICATION</div>
-<div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / LIVE BIOMETRIC FEED</h2><span class="badge" id="feed-state">STANDBY</span></div>
+<div class="status-banner" id="verdict" role="status">CHECKPOINT INACTIVE</div>
+<div class="grid"><section class="panel"><div class="panel-head"><h2 class="section-label">01 / LIVE BIOMETRIC FEED</h2><span class="badge" id="feed-state">INACTIVE</span></div>
 {camera()}
 <div class="camera-controls-bar" id="camera-controls-bar">
   <button type="button" class="primary" id="start-camera">START CAMERA</button>
@@ -43,8 +43,8 @@ CHECKPOINT = f'''
   <span id="camera-prompt-text">CAMERA PERMISSION REQUIRED</span>
 </div>
 <div class="telemetry">
-  <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STANDBY</strong></div>
-  <div class="stat"><span class="stat-label">SCANNER</span><strong id="scanner-status">STANDBY</strong></div>
+  <div class="stat"><span class="stat-label">CAMERA</span><strong id="camera-status">STOPPED</strong></div>
+  <div class="stat"><span class="stat-label">SCANNER</span><strong id="scanner-status">STOPPED</strong></div>
   <div class="stat"><span class="stat-label">LIVENESS</span><strong id="liveness">NO FACE</strong></div>
   <div class="stat"><span class="stat-label">PUSH</span><strong id="push-status">READY</strong></div>
   <div class="stat"><span class="stat-label">ALARM</span><strong id="alarm-status">SILENT</strong></div>

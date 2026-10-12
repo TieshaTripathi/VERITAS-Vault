@@ -26,7 +26,7 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from src.policy.two_man import PolicyState, TwoManPolicyRules
 
-WINDOW_SECONDS = 5.0  # Immutable sliding window budget (delta_t)
+WINDOW_SECONDS = 15.0  # Immutable sliding window budget (delta_t)
 
 
 class EvaluationResult(BaseModel):

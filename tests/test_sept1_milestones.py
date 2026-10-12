@@ -202,7 +202,7 @@ def test_policy_engine_standard_mode():
     emp_face = [{"name": "Alice", "role": "Employee", "is_recognized": True, "is_authorized": True}]
     res = evaluate_access("Standard Locker Access", emp_face, session_state)
     assert res["status"] == "WAITING"
-    assert res["remaining"] <= 5.0
+    assert res["remaining"] <= 15.0
     assert res["unlocked"] is False
 
     cust_face = [{"name": "Charlie", "role": "Customer", "is_recognized": True, "is_authorized": True}]

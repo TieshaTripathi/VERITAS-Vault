@@ -290,7 +290,7 @@ export function evaluateSecurityEvent(result) {
     if (state === "GRANTED" || state === "RESET") {
       stopAlarm();
     }
-    if (state === "RESET" || state === "STANDBY") {
+    if (state === "RESET") {
       clearActiveAlert();
     }
     return;

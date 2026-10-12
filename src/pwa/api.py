@@ -286,6 +286,17 @@ def me(user=Depends(monitor_or_above)):
     return {k: user[k] for k in ("name", "role")}
 
 
+def get_git_commit():
+    env_c = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("VERCEL_GIT_COMMIT_SHA")
+    if env_c:
+        return env_c
+    try:
+        import subprocess
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        return "local"
+
+
 @app.get("/api/health")
 def health():
     return {
@@ -295,7 +306,7 @@ def health():
         "auth_configured": bool(os.environ.get("SUPABASE_URL") or os.environ.get("VAULT_OPERATOR_PASSWORD_HASH")),
         "encryption_configured": bool(os.environ.get("VAULT_ENCRYPTION_KEY")),
         "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")),
-        "commit": os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "local"
+        "commit": get_git_commit(),
     }
 
 
@@ -943,6 +954,14 @@ def logs(verdict: str = "", start: str = "", end: str = "", user=Depends(monitor
                 raise HTTPException(422, "Use an ISO date")
     return [e for e in Store().logs() if (not verdict or e["verdict"] == verdict)
             and (not start or e["timestamp"][:10] >= start) and (not end or e["timestamp"][:10] <= end)]
+
+
+@app.get("/api/logs/{event_id}")
+def single_log(event_id: uuid.UUID, user=Depends(monitor_or_above)):
+    event = Store().event(str(event_id))
+    if not event:
+        raise HTTPException(404, "Audit log event not found")
+    return event
 
 
 @app.get("/api/logs/{event_id}/evidence")

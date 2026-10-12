@@ -40,10 +40,17 @@ async function load() {
 
     // Auto-inspect event if specified in query parameter (?event=<event_id>)
     const targetEventId = new URLSearchParams(window.location.search).get("event");
-    if (targetEventId && events.length > 0) {
+    if (targetEventId) {
       const match = events.find((e) => e.id === targetEventId);
       if (match) {
         inspect(match);
+      } else {
+        try {
+          const directEvent = await api(`/logs/${encodeURIComponent(targetEventId)}`);
+          if (directEvent && directEvent.id) {
+            inspect(directEvent);
+          }
+        } catch {}
       }
     }
   } catch (error) {
