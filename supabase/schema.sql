@@ -115,9 +115,10 @@ create or replace function public.vault_commit(
 declare changed integer;
 begin
   if expected_version = -1 then
-    insert into public.vault_records(id,payload,version) values(record_id,new_payload,0) on conflict do nothing;
+    insert into public.vault_records(id,payload,version) values(record_id,coalesce(new_payload, '{}'::jsonb),0)
+      on conflict (id) do update set payload=excluded.payload, version=public.vault_records.version + 1;
   else
-    update public.vault_records set payload=new_payload,version=version+1
+    update public.vault_records set payload=coalesce(new_payload, '{}'::jsonb),version=version+1
       where id=record_id and version=expected_version;
   end if;
   get diagnostics changed = row_count;

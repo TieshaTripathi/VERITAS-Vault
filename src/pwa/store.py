@@ -53,15 +53,22 @@ class Store:
     def get(self, key):
         if self.cloud:
             rows = self.cloud.rows("vault_records", id=f"eq.{key}", select="payload,version")
-            return (rows[0]["payload"], rows[0]["version"]) if rows else (None, -1)
+            if not rows:
+                return (None, -1)
+            p = rows[0]["payload"]
+            return (None if (p is None or p == {}) else p, rows[0]["version"])
         with self.db() as conn:
             row = conn.execute("SELECT payload,version FROM records WHERE id=?", (key,)).fetchone()
-        return (json.loads(row[0]), row[1]) if row else (None, -1)
+        if not row:
+            return (None, -1)
+        p = json.loads(row[0])
+        return (None if (p is None or p == {}) else p, row[1])
 
     def cas(self, key, version, payload, event=None, job=None):
+        payload_data = {} if payload is None else payload
         if self.cloud:
             return self.cloud.request("POST", "/rest/v1/rpc/vault_commit", json={
-                "record_id": key, "expected_version": version, "new_payload": payload,
+                "record_id": key, "expected_version": version, "new_payload": payload_data,
                 "audit_event": event, "alert_job": job,
             }).json()
         with self.db() as conn:
@@ -69,7 +76,7 @@ class Store:
             if (row[0] if row else -1) != version:
                 return False
             conn.execute("INSERT INTO records VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,version=excluded.version",
-                         (key, json.dumps(payload), version + 1))
+                         (key, json.dumps(payload_data), version + 1))
             if event:
                 conn.execute("INSERT OR IGNORE INTO access_audit_logs VALUES(?,?)", (event["id"], json.dumps(event)))
             if job:

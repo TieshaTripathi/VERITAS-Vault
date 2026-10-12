@@ -917,7 +917,6 @@ class Mode(BaseModel):
 def reset(body: Mode, user=Depends(operator)):
     store = Store()
     state, version = store.get("checkpoint:main")
-    version = version if state else -1
     store.put("incident:active", None)
     from src.vision.biometric_service import default_biometric_service
     default_biometric_service.tracker.clear()
