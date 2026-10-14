@@ -88,15 +88,16 @@ def evaluate_multisignal_pad(
         gray = face_crop
         color_score = 0.85
 
-    # 1. Texture analysis
-    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    texture_score = float(min(1.0, laplacian_var / 450.0))
+    # 1. Texture analysis on normalized 112x112 canonical face crop
+    norm_gray = cv2.resize(gray, (112, 112), interpolation=cv2.INTER_LINEAR)
+    laplacian_var = float(cv2.Laplacian(norm_gray, cv2.CV_64F).var())
+    texture_score = float(min(1.0, laplacian_var / 350.0))
 
-    if laplacian_var < 60.0:
+    if laplacian_var < 45.0:
         reasons.append("PAD-TEXTURE-BLUR-SPOOF")
 
     # 2. Contrast analysis
-    contrast = float(np.std(gray))
+    contrast = float(np.std(norm_gray))
     contrast_score = float(min(1.0, contrast / 45.0))
     if contrast_score < 0.35:
         reasons.append("PAD-LOW-CONTRAST")
@@ -117,19 +118,30 @@ def evaluate_multisignal_pad(
     )
 
     pad_score = round(float(min(1.0, max(0.0, raw_pad))), 3)
-    if laplacian_var < 60.0:
-        pad_confidence = round(float(min(0.55, max(0.10, laplacian_var / 120.0))), 2)
-    elif not is_clean:
-        pad_confidence = round(float(min(0.50, 0.20 + (1.0 - moire_score) * 0.30)), 2)
+    if laplacian_var < 20.0 or not is_clean:
+        pad_confidence = round(float(min(0.45, max(0.05, laplacian_var / 80.0))), 2)
+    elif laplacian_var < 45.0:
+        pad_confidence = round(float(min(0.65, max(0.30, laplacian_var / 70.0))), 2)
     else:
-        pad_confidence = round(float(min(0.99, max(0.20, 0.70 + pad_score * 0.29))), 2)
+        pad_confidence = round(float(min(0.99, max(0.70, 0.70 + pad_score * 0.29))), 2)
 
-    is_pass = (
+    is_confirmed_attack = (not is_clean) or (laplacian_var < 20.0 and contrast < 12.0) or (pad_score < 0.25)
+    is_confirmed_live = (
         pad_confidence >= threshold and
-        laplacian_var >= 60.0 and
-        is_clean
+        laplacian_var >= 45.0 and
+        is_clean and
+        contrast_score >= 0.35
     )
-    status = "PASS" if is_pass else "FAIL"
+
+    if is_confirmed_live:
+        status = "PASS"
+    elif is_confirmed_attack:
+        status = "FAIL"
+    else:
+        # Uncertain heuristic PAD result: requires additional verification, not an immediate attack
+        status = "UNCERTAIN"
+        if not reasons:
+            reasons.append("PAD-HEURISTIC-UNCERTAIN")
 
     return {
         "pad_score": pad_score,
@@ -141,8 +153,9 @@ def evaluate_multisignal_pad(
             "contrast": round(contrast_score, 3),
             "moire": round(moire_score, 3)
         },
-        "reason_codes": reasons if not is_pass else [],
+        "reason_codes": reasons if status != "PASS" else [],
         "pad_model_version": PAD_MODEL_VERSION
+
     }
 
 

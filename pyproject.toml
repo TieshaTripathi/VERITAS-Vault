@@ -25,3 +25,5 @@ entrypoint = "app:app"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = "--basetemp=.pytest_temp"
+testpaths = ["tests"]
+

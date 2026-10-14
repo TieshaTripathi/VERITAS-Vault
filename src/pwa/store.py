@@ -26,15 +26,14 @@ class Store:
             raise CloudUnavailable("Vercel requires Supabase; ephemeral SQLite is not an access-control store")
         if os.environ.get("VERCEL") and not os.environ.get("APP_ORIGIN", "").startswith("https://"):
             raise CloudUnavailable("A fixed HTTPS APP_ORIGIN is required on Vercel")
-        if not self.cloud:
-            data_dir().mkdir(parents=True, exist_ok=True)
-            with self.db() as conn:
-                conn.executescript("""
-                  CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, payload TEXT NOT NULL, version INTEGER NOT NULL);
-                  CREATE TABLE IF NOT EXISTS enrolled_users(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-                  CREATE TABLE IF NOT EXISTS access_audit_logs(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-                  CREATE TABLE IF NOT EXISTS enrollment_requests(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
-                """)
+        data_dir().mkdir(parents=True, exist_ok=True)
+        with self.db() as conn:
+            conn.executescript("""
+              CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, payload TEXT NOT NULL, version INTEGER NOT NULL);
+              CREATE TABLE IF NOT EXISTS enrolled_users(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+              CREATE TABLE IF NOT EXISTS access_audit_logs(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+              CREATE TABLE IF NOT EXISTS enrollment_requests(id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+            """)
 
     @contextmanager
     def db(self):
@@ -126,7 +125,13 @@ class Store:
         match["revoked_by"] = revoker
         match["revoked_at"] = time.time()
         self.enroll(match)
+        try:
+            from src.vision.biometric_service import default_biometric_service
+            default_biometric_service.invalidate_cache()
+        except Exception:
+            pass
         return True
+
 
     def save_enrollment_request(self, request_record: dict):
         req_id = request_record["request_id"]

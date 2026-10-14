@@ -28,6 +28,7 @@ class DetectedFace:
     pad_confidence: float = 0.90
     pad_signals: Dict[str, Any] = field(default_factory=dict)
     pad_reason_codes: List[str] = field(default_factory=list)
+    quality: Any = None
 
 
 class BaseFaceDetector(ABC):

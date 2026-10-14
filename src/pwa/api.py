@@ -506,6 +506,8 @@ def approve_enrollment_request(request_id: str, user=Depends(admin)):
         "baseline": req["baseline"]
     }
     store.enroll(person)
+    from src.vision.biometric_service import default_biometric_service
+    default_biometric_service.invalidate_cache()
     return {"status": "APPROVED", "user_id": req["user_id"], "approved_by": user["id"], "activated": True}
 
 
@@ -532,6 +534,8 @@ def revoke_identity_endpoint(user_id: str, user=Depends(admin)):
     ok = store.revoke_user(user_id.upper(), revoker=user["id"])
     if not ok:
         raise HTTPException(404, f"Identity {user_id} not found in enrolled personnel")
+    from src.vision.biometric_service import default_biometric_service
+    default_biometric_service.invalidate_cache()
     return {"status": "REVOKED", "user_id": user_id.upper(), "revoked_by": user["id"]}
 
 
@@ -799,8 +803,8 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
 
     # Incident deduplication for continuous unauthorized faces
     potential_breach_code = (
-        "ZT-002" if any(not f.get("is_live") for f in faces)
-        else "ZT-001" if any(not f.get("is_recognized") for f in faces)
+        "ZT-002" if any(not f.get("is_live") and f.get("liveness") == "FAIL" for f in faces)
+        else "ZT-001" if any(not f.get("is_recognized") and f.get("recognition_state") not in ("VERIFYING", "POSSIBLE_MATCH") for f in faces)
         else None
     )
     active_incident_id = None
@@ -936,8 +940,8 @@ def checkpoint_status(user=Depends(monitor_or_above)):
     current, _ = store.get("checkpoint:main")
     current = current or fresh()
     active_inc, _ = store.get("incident:active")
-    current["active_incident"] = active_inc.get("id") if (active_inc and current.get("state") == "BREACH") else (current.get("last_event") or "NONE")
-    current["incident_code"] = current.get("reason_code") or "NONE"
+    current["active_incident"] = active_inc.get("id") if (active_inc and current.get("state") == "BREACH") else "NONE"
+    current["incident_code"] = (current.get("reason_code") if current.get("state") == "BREACH" else "NONE") or "NONE"
     return current
 
 

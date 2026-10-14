@@ -70,16 +70,26 @@ def advance(state, faces, now, digest=None):
         result["safe_user_message"] = verifying_msg
         return result, False
 
+    # Check for unconfirmed liveness (liveness checking state preserves security by denying access)
+    has_unconfirmed_liveness = any(
+        (f.get("liveness") == "CHECKING" or f.get("pad_status") == "CHECKING" or not f.get("is_live"))
+        for f in faces
+    )
+    if has_unconfirmed_liveness:
+        result["safe_user_message"] = "LIVENESS CHECKING — HOLD STILL"
+        return result, False
+
     # 4. Identity Registration & Custody Window Start
     duplicate_first = False
     new_faces = []
     for face in faces:
-        if not face.get("is_recognized"):
+        if not face.get("is_recognized") or not face.get("is_live"):
             continue
         if any(p["id"] == face["id"] for p in result["parties"]):
             duplicate_first = True
         else:
             new_faces.append(face)
+
 
     for face in new_faces:
         result["parties"].append({k: face[k] for k in ("id", "name", "role")})

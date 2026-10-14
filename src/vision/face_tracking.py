@@ -44,18 +44,26 @@ class FaceTrack:
         # Temporal observation ring buffer (size 5)
         self.history: Deque[ObservationRecord] = deque(maxlen=5)
 
-        # Consensus consensus state
+        # Consensus state
         self.consensus_verdict: str = "VERIFYING"   # "VERIFYING" | "VERIFIED" | "POSSIBLE_MATCH" | "UNKNOWN_CONFIRMED"
         self.confirmed_identity: Optional[Dict[str, Any]] = None
         self.consecutive_unknown: int = 0
+        self.consecutive_conflicts: int = 0
         self.consecutive_pad_fails: int = 0
         self.pad_status: str = "LIVENESS CHECKING"  # "LIVENESS CHECKING" | "LIVENESS PASS" | "LIVENESS FAILED"
         self.best_similarity: float = 0.0
 
-    def should_run_embedding(self, now: float, interval_ms: float = 1200.0) -> bool:
+    def should_run_embedding(self, now: float, interval_ms: float = 1200.0, min_interval_ms: float = 300.0) -> bool:
         """Determines if heavy embedding inference should run on this frame."""
+        # Enforce minimum observation time (e.g. 300 ms) between independent observations
+        if self.last_embedding_time > 0 and (now - self.last_embedding_time) * 1000.0 < min_interval_ms:
+            return False
+
         # Always run if track has no observation history yet
         if not self.history:
+            return True
+        # If there is conflicting evidence on a verified track, rapidly re-evaluate (once min_interval_ms is met)
+        if self.consecutive_conflicts > 0:
             return True
         # Rapidly gather observations during initial verification until consensus forms
         if self.consensus_verdict == "VERIFYING" and len(self.history) < 3:
@@ -67,7 +75,8 @@ class FaceTrack:
         match: BiometricMatchResult,
         is_live: bool,
         now: float,
-        config: BiometricConfig
+        config: BiometricConfig,
+        pad_status: Optional[str] = None
     ) -> None:
         """Appends an observation and re-evaluates temporal consensus."""
         self.last_embedding_time = now
@@ -85,23 +94,67 @@ class FaceTrack:
         self.history.append(record)
 
         # 1. Temporal PAD evaluation (Liveness consensus)
-        if is_live:
+        eff_pad_status = pad_status
+        if eff_pad_status is None:
+            eff_pad_status = "PASS" if is_live else "FAIL"
+
+        if eff_pad_status == "PASS":
             self.consecutive_pad_fails = 0
             self.pad_status = "LIVENESS PASS"
-        else:
+        elif eff_pad_status == "UNCERTAIN":
+            # Uncertain heuristic PAD result: requires additional verification, not an immediate attack
+            self.pad_status = "LIVENESS CHECKING"
+        else:  # "FAIL"
             self.consecutive_pad_fails += 1
             if self.consecutive_pad_fails >= config.pad_confirmation_frames:
                 self.pad_status = "LIVENESS FAILED"
             else:
                 self.pad_status = "LIVENESS CHECKING"
 
-        # 2. Identity Consensus evaluation
-        if match.state == RecognitionState.VERIFIED and match.candidate_id:
+        # 2. Identity Consensus evaluation & Sticky-Track Defense
+        cand_id = match.candidate_id
+
+        # If track is already VERIFIED, check for conflicting evidence:
+        if self.consensus_verdict == "VERIFIED" and self.confirmed_identity:
+            verified_id = self.confirmed_identity["id"]
+            is_conflicting = False
+
+            if match.state == RecognitionState.UNKNOWN:
+                is_conflicting = True
+            elif match.state in (RecognitionState.VERIFIED, RecognitionState.POSSIBLE_MATCH) and cand_id != verified_id:
+                is_conflicting = True
+
+            if is_conflicting:
+                self.consecutive_conflicts += 1
+                if self.consecutive_conflicts >= 2:
+                    # Two consecutive conflicting observations reset track to VERIFYING
+                    self.consensus_verdict = "VERIFYING"
+                    self.confirmed_identity = None
+                    self.consecutive_conflicts = 0
+                    self.consecutive_unknown = 1 if match.state == RecognitionState.UNKNOWN else 0
+                    self.history.clear()
+                    self.history.append(record)
+                    return
+                else:
+                    # First conflicting observation: flag conflict but await 2nd confirmation
+                    return
+            else:
+                # Evidence agrees with verified identity
+                self.consecutive_conflicts = 0
+                if match.state == RecognitionState.VERIFIED:
+                    self.confirmed_identity["similarity"] = match.similarity
+                return
+
+        # Evaluating track in VERIFYING or UNCONFIRMED state
+        if match.state == RecognitionState.VERIFIED and cand_id:
             self.consecutive_unknown = 0
-            
-            # Count matches for this candidate in the last window
-            cand_id = match.candidate_id
-            match_count = sum(1 for obs in self.history if obs.state == RecognitionState.VERIFIED and obs.candidate_id == cand_id)
+            self.consecutive_conflicts = 0
+
+            # Count matches for this candidate in the window
+            match_count = sum(
+                1 for obs in self.history
+                if obs.state == RecognitionState.VERIFIED and obs.candidate_id == cand_id
+            )
 
             if match_count >= config.match_consensus_frames:
                 self.consensus_verdict = "VERIFIED"
@@ -116,7 +169,7 @@ class FaceTrack:
 
         elif match.state == RecognitionState.POSSIBLE_MATCH:
             self.consecutive_unknown = 0
-            # If already verified, retain verified identity unless new candidate dominates
+            self.consecutive_conflicts = 0
             if self.consensus_verdict != "VERIFIED":
                 self.consensus_verdict = "POSSIBLE_MATCH"
                 self.confirmed_identity = {
@@ -127,16 +180,13 @@ class FaceTrack:
                 }
 
         elif match.state == RecognitionState.UNKNOWN:
-            # If already established as verified, a single bad frame won't flip it to breach
-            if self.consensus_verdict == "VERIFIED":
-                return
-
             self.consecutive_unknown += 1
             if self.consecutive_unknown >= config.unknown_confirmation_frames:
                 self.consensus_verdict = "UNKNOWN_CONFIRMED"
                 self.confirmed_identity = None
             else:
                 self.consensus_verdict = "VERIFYING"
+
 
 
 class FaceTracker:

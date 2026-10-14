@@ -7,6 +7,7 @@ in-memory template caching, persistent tracking, and multi-frame temporal consen
 """
 import base64
 import io
+import logging
 import os
 import threading
 import time
@@ -32,6 +33,8 @@ from src.vision.face_quality import ENROLLMENT_STEPS, FaceQualityAssessment, eva
 from src.vision.face_tracking import FaceTrack, FaceTracker
 from src.vision.liveness import evaluate_multisignal_pad
 
+logger = logging.getLogger("biometric_service")
+
 
 class BiometricService:
     """
@@ -54,7 +57,7 @@ class BiometricService:
         self._processing_lock = threading.Lock()
 
     def invalidate_cache(self) -> None:
-        """Flushes the in-memory enrolled identity cache."""
+        """Flushes the in-memory enrolled identity cache and resets track state."""
         with self._cache_lock:
             self._cache.clear()
             self._cache_loaded = False
@@ -70,10 +73,20 @@ class BiometricService:
                 return
 
             self._cache.clear()
+            failed_loads = 0
             for person in store_personnel:
                 person_id = person.get("id")
+                if not person_id:
+                    continue
+
+                # Ensure revoked identities cannot be loaded into the biometric cache
+                if person.get("status") == "REVOKED":
+                    continue
+
                 raw_template = person.get("template")
-                if not person_id or not raw_template:
+                if not raw_template:
+                    logger.error(f"Personnel record '{person_id}' missing biometric template")
+                    failed_loads += 1
                     continue
 
                 try:
@@ -124,11 +137,24 @@ class BiometricService:
                                 quality_score=0.85,
                                 enrolled_at=str(person.get("created_at", ""))
                             )
-                except Exception:
-                    # Corrupt or incompatible template is safely bypassed
+                        else:
+                            logger.error(f"Template for identity '{person_id}' missing valid embedding or norm crop")
+                            failed_loads += 1
+                except Exception as exc:
+                    failed_loads += 1
+                    logger.error(f"Failed to load biometric template for identity '{person_id}': {type(exc).__name__}")
                     continue
 
-            self._cache_loaded = True
+            # Never mark cache successfully loaded when expected templates have failed to load
+            if failed_loads == 0:
+                self._cache_loaded = True
+            else:
+                logger.warning(
+                    f"Biometric cache incomplete: {failed_loads} template(s) failed to load. "
+                    f"Cache will not be marked as loaded."
+                )
+                self._cache_loaded = False
+
 
     def process_frame(
         self,
@@ -164,6 +190,10 @@ class BiometricService:
         matching_total_ms = 0.0
 
         for face, track in tracked_pairs:
+            # Quality assessment: reject poor-quality face crops before embedding extraction
+            quality_eval = evaluate_quality(face, frame.shape[:2])
+            face.quality = quality_eval
+
             # 3. Liveness (PAD)
             pad_res = evaluate_multisignal_pad(face.crop, threshold=self.config.pad_threshold)
             face.is_live = (pad_res["status"] == "PASS")
@@ -174,7 +204,12 @@ class BiometricService:
             face.pad_reason_codes = pad_res["reason_codes"]
 
             # 4. Check if heavy embedding inference should run on this track
-            if track.should_run_embedding(curr_time, interval_ms=self.config.embedding_interval_ms):
+            # ONLY extract embedding if face quality passes checks (sharpness, lighting, scale, pose)
+            if quality_eval.is_valid and track.should_run_embedding(
+                curr_time,
+                interval_ms=self.config.embedding_interval_ms,
+                min_interval_ms=self.config.min_observation_interval_ms
+            ):
                 t_emb0 = time.perf_counter()
                 probe_embedding = self.embedding_extractor.extract_embedding(face.crop, face.landmarks)
                 embedding_total_ms += (time.perf_counter() - t_emb0) * 1000.0
@@ -186,7 +221,7 @@ class BiometricService:
                 matching_total_ms += (time.perf_counter() - t_mat0) * 1000.0
 
                 # 6. Record observation and update consensus
-                track.record_observation(match_result, face.is_live, curr_time, self.config)
+                track.record_observation(match_result, face.is_live, curr_time, self.config, pad_status=face.pad_status)
 
             # Determine user-facing verdict from consensus state
             verdict = track.consensus_verdict  # "VERIFIED" | "POSSIBLE_MATCH" | "UNKNOWN_CONFIRMED" | "VERIFYING"
@@ -195,7 +230,15 @@ class BiometricService:
             # Identity details
             identity = track.confirmed_identity
             cand_id = identity["id"] if identity else "unknown"
-            cand_name = identity["name"] if identity else ("Unknown Person" if verdict == "UNKNOWN_CONFIRMED" else "Verifying Identity...")
+            if identity:
+                cand_name = identity["name"]
+            elif not quality_eval.is_valid and verdict == "VERIFYING":
+                cand_name = quality_eval.guidance
+            elif verdict == "UNKNOWN_CONFIRMED":
+                cand_name = "Unknown Person"
+            else:
+                cand_name = "Verifying Identity..."
+
             cand_role = identity["role"] if identity else ("Unauthorized" if verdict == "UNKNOWN_CONFIRMED" else "Evaluating Clearance")
             similarity = identity.get("similarity", track.best_similarity) if identity else track.best_similarity
 
@@ -205,6 +248,7 @@ class BiometricService:
                 else "FAIL" if track.pad_status == "LIVENESS FAILED"
                 else "CHECKING"
             )
+
 
             faces_output.append({
                 "id": cand_id,

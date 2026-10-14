@@ -33,6 +33,8 @@ class BiometricConfig:
     # Scheduling & Cadence
     # Track recognition embedding cadence (ms) - avoids running heavy embedding on every video frame
     embedding_interval_ms: float = float(os.environ.get("VAULT_EMBEDDING_INTERVAL_MS", "1200.0"))
+    # Minimum time separation between independent observations used for biometric consensus
+    min_observation_interval_ms: float = float(os.environ.get("VAULT_MIN_OBSERVATION_INTERVAL_MS", "300.0"))
 
     # Multi-Sample Enrollment
     min_enrollment_samples: int = int(os.environ.get("VAULT_MIN_ENROLLMENT_SAMPLES", "5"))
