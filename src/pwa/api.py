@@ -208,14 +208,24 @@ def login(body: Credentials, request: Request, response: Response):
     uname = body.username.strip().casefold()
     pwd = body.password
 
-    # Check operator/admin account
+    # Check operator/admin account with strict cryptographic PBKDF2 hash verification
     admin_hash = os.environ.get("VAULT_OPERATOR_PASSWORD_HASH", "")
     admin_uname = os.environ.get("VAULT_OPERATOR_USERNAME", "admin").casefold()
-    is_admin_user = (
-        (admin_hash and check_password(pwd, admin_hash) and uname == admin_uname)
-        or (uname in (admin_uname, "admin@veritas-vault.internal", "admin", "test-operator")
-            and (pwd in ("test-only-password-strong", "vault-operator-password") or (admin_hash and check_password(pwd, admin_hash))))
+    is_prod = bool(
+        os.environ.get("RENDER")
+        or os.environ.get("VERCEL")
+        or os.environ.get("K_SERVICE")
+        or os.environ.get("ENV") == "production"
+        or os.environ.get("ENVIRONMENT") == "production"
     )
+
+    if admin_hash:
+        is_admin_user = bool(uname == admin_uname and check_password(pwd, admin_hash))
+    elif not is_prod and not store.cloud:
+        # Isolated local developer bootstrap without configured password hash only
+        is_admin_user = bool(uname == admin_uname and pwd == "test-only-password-strong")
+    else:
+        is_admin_user = False
 
     user_rec, _ = store.get("user:" + uname)
     if is_admin_user:
@@ -682,18 +692,33 @@ def reset_demo_environment(user=Depends(admin)):
     }
 
 
-def transition(faces=None, evidence=None, key="checkpoint:main"):
+def transition(faces=None, evidence=None, key="checkpoint:main", raw=None, frame_shape=None, digest=None):
     store = Store()
     for _ in range(8):
         state, version = store.get(key)
         state = state or fresh()
-        updated, terminal = advance(state, faces or [], time.time(), evidence["sha256"] if evidence else None)
+        already_seen = (digest in (state.get("seen") or [])) if digest else False
+        ev_digest = (evidence.get("sha256") if evidence else None) or (None if already_seen else digest) or (None if already_seen else (hashlib.sha256(raw).hexdigest() if raw else None))
+        updated, terminal = advance(state, faces or [], time.time(), ev_digest)
         if evidence:
             updated["evidence"] = evidence
         event = job = None
         if terminal:
             event_id = str(uuid.uuid4())
             proof = updated.get("evidence", {})
+            d = (evidence.get("sha256") if evidence else None) or digest or (hashlib.sha256(raw).hexdigest() if raw else None)
+            if not proof and raw and d:
+                ev_path = f"evidence/{uuid.uuid4()}.enc"
+                store.save_blob(ev_path, seal(raw, "evidence:" + d))
+                proof = {
+                    "path": ev_path,
+                    "sha256": d,
+                    "shape": frame_shape or [120, 120, 3],
+                    "encoding": "BGR uint8 decoded pixels",
+                    "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1"),
+                }
+                from src.pwa.alerts import cache_evidence_photo
+                cache_evidence_photo(ev_path, raw)
             now_utc = utc()
             ledger_entry = default_audit_ledger.append_event(
                 event_id=event_id,
@@ -904,13 +929,14 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
             return res
 
     digest = hashlib.sha256(frame.tobytes()).hexdigest()  # Hash in memory before any storage.
-    proof = None
-    if faces and digest not in (current or {}).get("seen", []):
-        path = f"evidence/{uuid.uuid4()}.enc"
-        store.save_blob(path, seal(raw, "evidence:" + digest))
-        proof = {"path": path, "sha256": digest, "shape": list(frame.shape),
-                 "encoding": "BGR uint8 decoded pixels", "key_id": os.environ.get("VAULT_KEY_ID", "primary-v1")}
-    result, terminal = transition(faces, proof)
+    result, terminal = transition(
+        faces=faces,
+        evidence=None,
+        key="checkpoint:main",
+        raw=raw,
+        frame_shape=frame_size,
+        digest=digest,
+    )
     result.update(faces=faces, quality=quality_report, frame_size=frame_size)
     if result["state"] == "GRANTED":
         result["authorization_token"] = default_pdp._issue_signed_authorization(

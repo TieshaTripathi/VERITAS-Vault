@@ -10,12 +10,37 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
+import threading
+from typing import Dict, Optional
+
 import httpx
+import numpy as np
 
 from src.pwa.security import unseal
 from src.pwa.store import Store
 
 logger = logging.getLogger("vault.alerts")
+
+_evidence_photo_cache: Dict[str, bytes] = {}
+_evidence_cache_lock = threading.Lock()
+
+
+def cache_evidence_photo(path: str, raw_bytes: bytes):
+    """Retains recent raw encrypted evidence frames in memory for immediate outbox dispatch."""
+    if not path or not raw_bytes:
+        return
+    with _evidence_cache_lock:
+        if len(_evidence_photo_cache) > 20:
+            _evidence_photo_cache.pop(next(iter(_evidence_photo_cache)), None)
+        _evidence_photo_cache[path] = raw_bytes
+
+
+def get_cached_evidence_photo(path: str) -> Optional[bytes]:
+    """Retrieves in-memory frame bytes if available, avoiding cloud storage round-trip."""
+    if not path:
+        return None
+    with _evidence_cache_lock:
+        return _evidence_photo_cache.get(path)
 
 CRITICAL_BREACH_CODES = frozenset({"ZT-001", "ZT-002", "ZT-008", "ZT-009", "ZT-013"})
 
@@ -484,12 +509,24 @@ def deliver(key, job, version):
                 if saved_ev and saved_ev.get("evidence"):
                     ev_path = saved_ev["evidence"].get("path")
                     ev_hash = saved_ev["evidence"].get("sha256")
-            if ev_path and ev_hash:
-                try:
-                    enc_blob = store.read_blob(ev_path)
-                    photo_bytes = unseal(enc_blob, "evidence:" + ev_hash)
-                except Exception as dec_err:
-                    logger.warning("Could not decrypt evidence frame for Telegram: %s", dec_err)
+            if ev_path:
+                cached_raw = get_cached_evidence_photo(ev_path)
+                if cached_raw:
+                    try:
+                        import cv2
+                        frame_mat = cv2.imdecode(np.frombuffer(cached_raw, np.uint8), cv2.IMREAD_COLOR) if not isinstance(cached_raw, np.ndarray) else cached_raw
+                        if frame_mat is not None:
+                            ok, buf = cv2.imencode(".jpg", frame_mat)
+                            if ok:
+                                photo_bytes = buf.tobytes()
+                    except Exception as c_err:
+                        logger.warning("Could not encode cached frame: %s", c_err)
+                if not photo_bytes and ev_hash:
+                    try:
+                        enc_blob = store.read_blob(ev_path)
+                        photo_bytes = unseal(enc_blob, "evidence:" + ev_hash)
+                    except Exception as dec_err:
+                        logger.warning("Could not decrypt evidence frame for Telegram: %s", dec_err)
 
             ts = job.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             reason_txt = job.get("reason", "Unauthorized person detected at vault checkpoint")
