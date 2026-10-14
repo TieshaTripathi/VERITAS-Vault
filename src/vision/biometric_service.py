@@ -93,6 +93,16 @@ class BiometricService:
                     # Unseal template envelope
                     raw_bytes = unseal(base64.b64decode(raw_template), "person:" + person_id)
                     with np.load(io.BytesIO(raw_bytes), allow_pickle=False) as data:
+                        active_version = getattr(self.embedding_extractor, "version", self.config.model_version)
+                        template_version = str(data.get("model_version", "legacy-512d"))
+                        # Safe re-enrollment check: flag template if trained on different model architecture
+                        needs_reenroll = (template_version != active_version)
+                        if needs_reenroll:
+                            logger.info(
+                                f"Identity '{person_id}' enrolled with model '{template_version}' "
+                                f"(active model is '{active_version}'). Marked for safe re-enrollment."
+                            )
+
                         # Standard 512-D embedding payload
                         if "identity_embedding" in data:
                             id_emb = data["identity_embedding"].astype(np.float32)
@@ -106,9 +116,10 @@ class BiometricService:
                                 role=person.get("role", "Employee"),
                                 identity_embedding=id_emb,
                                 representative_embeddings=reps,
-                                model_version=str(data.get("model_version", self.config.model_version)),
+                                model_version=template_version,
                                 quality_score=float(data.get("quality_score", 0.95)),
-                                enrolled_at=str(person.get("created_at", ""))
+                                enrolled_at=str(person.get("created_at", "")),
+                                needs_reenrollment=needs_reenroll
                             )
                         # Backwards compatibility: extract feature vector from legacy template
                         elif "embedding" in data and data["embedding"].size == 512:
@@ -119,9 +130,10 @@ class BiometricService:
                                 role=person.get("role", "Employee"),
                                 identity_embedding=id_emb,
                                 representative_embeddings=[],
-                                model_version="legacy-512d",
+                                model_version=template_version,
                                 quality_score=0.90,
-                                enrolled_at=str(person.get("created_at", ""))
+                                enrolled_at=str(person.get("created_at", "")),
+                                needs_reenrollment=needs_reenroll
                             )
                         elif "norm" in data:
                             # Re-extract standard 512-D embedding from stored norm crop
@@ -133,9 +145,10 @@ class BiometricService:
                                 role=person.get("role", "Employee"),
                                 identity_embedding=id_emb,
                                 representative_embeddings=[],
-                                model_version="migrated-512d",
+                                model_version=active_version,
                                 quality_score=0.85,
-                                enrolled_at=str(person.get("created_at", ""))
+                                enrolled_at=str(person.get("created_at", "")),
+                                needs_reenrollment=False
                             )
                         else:
                             logger.error(f"Template for identity '{person_id}' missing valid embedding or norm crop")
@@ -289,7 +302,7 @@ class BiometricService:
             "texture_ok": bool(detected_faces) and all(f["is_live"] for f in faces_output),
             "guidance": quality_eval.guidance,
             "telemetry": {
-                "detector": "OpenCV Haar (Cascade)",
+                "detector": type(self.detector).__name__,
                 "embedding_model": getattr(self.embedding_extractor, "version", "Standard-Gradient-512D-v2.0"),
                 "face_detection_ms": face_detection_ms,
                 "embedding_ms": round(embedding_total_ms, 2),
@@ -334,7 +347,7 @@ class BiometricService:
             buf,
             identity_embedding=identity_embedding,
             rep_embeddings=np.array(representative_embeddings, dtype=np.float32),
-            model_version=self.config.model_version,
+            model_version=getattr(self.embedding_extractor, "version", self.config.model_version),
             quality_score=0.96,
             norm=norm_face,
             embedding=identity_embedding

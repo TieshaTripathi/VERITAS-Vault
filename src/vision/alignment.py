@@ -11,10 +11,20 @@ returns alignment_success=False with reason RECAPTURE_REQUIRED.
 import math
 import cv2
 import numpy as np
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, Union
 
 # Load Haar Eye Cascade for robust CPU-based eye localization
 _eye_cascade = None
+
+# Canonical ArcFace / InsightFace reference points on standard 112x112 destination grid:
+# Point ordering: [viewer-left eye / subject-right eye, viewer-right eye / subject-left eye, nose, left mouth, right mouth]
+ARCFACE_REFERENCE_LANDMARKS = np.array([
+    [38.2946, 51.6963],
+    [73.5318, 51.5014],
+    [56.0252, 71.7366],
+    [41.5493, 92.3655],
+    [70.7299, 92.2041]
+], dtype=np.float32)
 
 
 def _get_eye_cascade() -> cv2.CascadeClassifier:
@@ -25,14 +35,96 @@ def _get_eye_cascade() -> cv2.CascadeClassifier:
     return _eye_cascade
 
 
+def align_face_5point(
+    image: np.ndarray,
+    landmarks: Union[np.ndarray, Dict[str, Tuple[float, float]]],
+    target_size: Tuple[int, int] = (112, 112)
+) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
+    """
+    Performs canonical 5-point similarity transformation (rotation, uniform scale, translation)
+    to ArcFace standard coordinates on a target_size grid. Preserves facial aspect ratio.
+
+    Args:
+        image: Source frame or crop.
+        landmarks: Either (5, 2) array or dict with 'right_eye', 'left_eye', 'nose', 'right_mouth', 'left_mouth'.
+        target_size: Output resolution, default (112, 112).
+
+    Returns:
+        (aligned_crop: np.ndarray, alignment_success: bool, metrics: Dict[str, Any])
+    """
+    if image is None or image.size == 0:
+        return np.zeros((*target_size, 3), dtype=np.uint8), False, {
+            "alignment_success": False,
+            "reason": "EMPTY_IMAGE",
+            "quality_score": 0.0
+        }
+
+    src_pts = None
+    if isinstance(landmarks, np.ndarray):
+        if landmarks.shape == (5, 2):
+            src_pts = landmarks.astype(np.float32)
+        elif landmarks.ndim == 1 and landmarks.size >= 10:
+            if landmarks.size == 15:  # Raw YuNet row [x,y,w,h, re_x, re_y, le_x, le_y, n_x, n_y, rm_x, rm_y, lm_x, lm_y, conf]
+                src_pts = landmarks[4:14].reshape((5, 2)).astype(np.float32)
+            else:
+                src_pts = landmarks[:10].reshape((5, 2)).astype(np.float32)
+    elif isinstance(landmarks, dict):
+        required_keys = ["right_eye", "left_eye", "nose", "right_mouth", "left_mouth"]
+        if all(k in landmarks for k in required_keys):
+            src_pts = np.array([
+                landmarks["right_eye"],
+                landmarks["left_eye"],
+                landmarks["nose"],
+                landmarks["right_mouth"],
+                landmarks["left_mouth"]
+            ], dtype=np.float32)
+
+    if src_pts is None or len(src_pts) != 5:
+        return cv2.resize(image, target_size), False, {
+            "alignment_success": False,
+            "reason": "INVALID_5POINT_LANDMARKS",
+            "quality_score": 0.50
+        }
+
+    # Scale reference points if target_size is not (112, 112)
+    dst_pts = ARCFACE_REFERENCE_LANDMARKS.copy()
+    if target_size != (112, 112):
+        scale_x = target_size[0] / 112.0
+        scale_y = target_size[1] / 112.0
+        dst_pts[:, 0] *= scale_x
+        dst_pts[:, 1] *= scale_y
+
+    M, inliers = cv2.estimateAffinePartial2D(src_pts, dst_pts)
+    if M is None:
+        return cv2.resize(image, target_size), False, {
+            "alignment_success": False,
+            "reason": "AFFINE_ESTIMATION_FAILED",
+            "quality_score": 0.50
+        }
+
+    aligned = cv2.warpAffine(
+        image,
+        M,
+        target_size,
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT
+    )
+    return aligned, True, {
+        "alignment_success": True,
+        "method": "CANONICAL_5POINT_AFFINE",
+        "quality_score": 0.98
+    }
+
+
 def align_face(
     face_crop: np.ndarray,
     target_size: Tuple[int, int] = (112, 112),
-    desired_left_eye: Tuple[float, float] = (0.32, 0.38)
+    desired_left_eye: Tuple[float, float] = (0.32, 0.38),
+    landmarks: Optional[Union[np.ndarray, Dict[str, Tuple[float, float]]]] = None
 ) -> Tuple[np.ndarray, bool, Dict[str, Any]]:
     """
-    Aligns a face crop by detecting eye coordinates, calculating rotation angle,
-    and applying affine transformation to normalize inter-pupillary distance.
+    Aligns a face crop by detecting eye coordinates or using 5-point landmarks,
+    calculating rotation angle, and applying affine transformation.
 
     Returns:
         (aligned_crop: np.ndarray, alignment_success: bool, metrics: Dict[str, Any])
@@ -52,6 +144,11 @@ def align_face(
             "reason": "FACE_TOO_SMALL_FOR_ALIGNMENT",
             "quality_score": 0.3
         }
+
+    if landmarks is not None:
+        aligned, ok, metrics = align_face_5point(face_crop, landmarks, target_size)
+        if ok:
+            return aligned, ok, metrics
 
     gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY) if len(face_crop.shape) == 3 else face_crop
     # Restrict eye search to upper 60% of face to avoid mouth false-positives

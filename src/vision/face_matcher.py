@@ -33,6 +33,7 @@ class EnrolledIdentity:
     embedding_version: str = "v2.0"
     quality_score: float = 0.95
     enrolled_at: str = ""
+    needs_reenrollment: bool = False
 
 
 @dataclass
@@ -83,6 +84,10 @@ def match_embedding(
     second_id: Optional[str] = None
 
     for person_id, identity in enrolled_identities.items():
+        # Never compare against identities requiring model re-enrollment
+        if getattr(identity, "needs_reenrollment", False):
+            continue
+
         # Match against mean centroid vector
         sim = compute_cosine_similarity(probe_embedding, identity.identity_embedding)
         
@@ -102,10 +107,24 @@ def match_embedding(
 
     similarity = round(max(0.0, min(1.0, best_sim)), 4)
     margin = round(best_sim - second_sim, 4) if second_sim >= 0 else similarity
+    margin_threshold = getattr(cfg, "margin_threshold", 0.06)
 
-    # Decision logic based on centralized thresholds
+    # Decision logic based on centralized thresholds and top-2 margin
     if best_id and similarity >= cfg.recognition_threshold:
         candidate = enrolled_identities[best_id]
+        # Ambiguity guard: If second candidate is too close, require clearer observation
+        if second_id and second_sim >= cfg.possible_match_threshold and margin < margin_threshold:
+            return BiometricMatchResult(
+                state=RecognitionState.POSSIBLE_MATCH,
+                candidate_id=candidate.id,
+                candidate_name=candidate.name,
+                candidate_role=candidate.role,
+                similarity=similarity,
+                threshold=cfg.recognition_threshold,
+                is_verified=False,
+                second_best_id=second_id,
+                margin=margin
+            )
         return BiometricMatchResult(
             state=RecognitionState.VERIFIED,
             candidate_id=candidate.id,

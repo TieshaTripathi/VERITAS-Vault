@@ -99,7 +99,7 @@ def template(face, person_id):
         buffer,
         identity_embedding=vector,
         rep_embeddings=np.array([vector], dtype=np.float32),
-        model_version=default_biometric_service.config.model_version,
+        model_version=getattr(default_biometric_service.embedding_extractor, "version", default_biometric_service.config.model_version),
         quality_score=0.95,
         norm=norm,
         embedding=vector

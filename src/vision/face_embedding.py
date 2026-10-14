@@ -107,15 +107,105 @@ class StandardFeatureEmbeddingExtractor(BaseEmbeddingExtractor):
         return unit_vec.astype(np.float32)
 
 
+class MobileFaceNetEmbeddingExtractor(BaseEmbeddingExtractor):
+    """
+    MobileFaceNet ONNX 512-D deep feature extractor.
+    Tagged with model_version = "mbf_onnx_v2".
+    Loads models/mobilefacenet.onnx once at startup.
+    Produces strictly L2-normalized 512-dimensional feature embeddings.
+    """
+
+    def __init__(self, model_path: Optional[str] = None):
+        if model_path is None:
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            candidate = os.path.join(base_dir, "models", "mobilefacenet.onnx")
+            if os.path.isfile(candidate):
+                model_path = candidate
+            else:
+                model_path = os.environ.get("MOBILEFACENET_MODEL_PATH", "models/mobilefacenet.onnx")
+
+        self.model_path = model_path
+        self.version = "mbf_onnx_v2"
+        self._net = None
+        self._session = None
+
+        if os.path.isfile(self.model_path):
+            self._init_model()
+
+    def _init_model(self) -> None:
+        try:
+            self._net = cv2.dnn.readNetFromONNX(self.model_path)
+        except Exception:
+            self._net = None
+            try:
+                import onnxruntime as ort
+                self._session = ort.InferenceSession(self.model_path, providers=["CPUExecutionProvider"])
+            except Exception:
+                self._session = None
+
+    def extract_embedding(
+        self,
+        face_crop: np.ndarray,
+        landmarks: Optional[Dict[str, Tuple[float, float]]] = None
+    ) -> np.ndarray:
+        if face_crop is None or face_crop.size == 0:
+            return np.zeros(512, dtype=np.float32)
+
+        if self._net is None and self._session is None:
+            if os.path.isfile(self.model_path):
+                self._init_model()
+            if self._net is None and self._session is None:
+                return StandardFeatureEmbeddingExtractor().extract_embedding(face_crop, landmarks)
+
+        # 1. 5-point alignment or canonical eye alignment to 112x112
+        aligned, ok, _ = align_face(face_crop, target_size=(112, 112), landmarks=landmarks)
+
+        # 2. Forward pass through MobileFaceNet
+        if self._net is not None:
+            blob = cv2.dnn.blobFromImage(
+                aligned,
+                scalefactor=1.0 / 127.5,
+                size=(112, 112),
+                mean=(127.5, 127.5, 127.5),
+                swapRB=True
+            )
+            self._net.setInput(blob)
+            raw_vec = self._net.forward().flatten()
+        elif self._session is not None:
+            rgb = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB).astype(np.float32)
+            normalized = (rgb - 127.5) / 127.5
+            chw = np.transpose(normalized, (2, 0, 1))[None].astype(np.float32)
+            input_name = self._session.get_inputs()[0].name
+            raw_vec = self._session.run(None, {input_name: chw})[0].flatten()
+        else:
+            return np.zeros(512, dtype=np.float32)
+
+        norm = max(float(np.linalg.norm(raw_vec)), 1e-8)
+        return (raw_vec / norm).astype(np.float32)
+
+
 @lru_cache(maxsize=1)
 def get_default_embedding_extractor() -> BaseEmbeddingExtractor:
     """Returns active embedding extractor based on system configuration."""
-    model_path = os.environ.get("FACENET_MODEL_PATH")
-    if model_path and os.path.isfile(model_path):
+    model_override = os.environ.get("VAULT_EMBEDDING_MODEL", "").lower()
+    if model_override == "standard":
+        return StandardFeatureEmbeddingExtractor()
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    mbf_path = os.path.join(base_dir, "models", "mobilefacenet.onnx")
+    if os.path.isfile(mbf_path):
         try:
-            return FaceNetEmbeddingExtractor(model_path)
+            return MobileFaceNetEmbeddingExtractor(model_path=mbf_path)
         except Exception:
             pass
+
+    facenet_path = os.environ.get("FACENET_MODEL_PATH")
+    if facenet_path and os.path.isfile(facenet_path):
+        try:
+            return FaceNetEmbeddingExtractor(facenet_path)
+        except Exception:
+            pass
+
     return StandardFeatureEmbeddingExtractor()
 
 

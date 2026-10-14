@@ -356,7 +356,56 @@ def quality(body: Snapshot, user=Depends(admin)):
         raise HTTPException(422, str(exc))
 
 
+def process_enrollment_payload(
+    body: Enrollment,
+    person_id: str
+) -> Tuple[str, np.ndarray, Dict[str, Any]]:
+    """
+    Unified multi-sample enrollment processing:
+      - Accepts 5 distinct sample snapshots (or fallback single snapshot)
+      - Inspects each frame for single aligned face, even lighting, sharpness, and PAD pass
+      - Uses default_biometric_service.create_multisample_template (5-sample aggregation)
+      - Returns (sealed_template_base64, primary_face_crop, quality_report)
+    """
+    from src.vision.biometric_service import default_biometric_service
+
+    sample_crops: List[np.ndarray] = []
+    landmarks_list: List[Optional[Dict]] = []
+    reports: List[Dict[str, Any]] = []
+
+    samples_to_process = body.samples if (body.samples and len(body.samples) >= 5) else ([body.image] if body.image else [])
+    if not samples_to_process:
+        raise HTTPException(422, "Enrollment image or samples required")
+
+    for idx, s_img in enumerate(samples_to_process):
+        frame, _ = decode(s_img)
+        faces, report = inspect(frame)
+        if not faces or len(faces) != 1 or not all(report[k] for k in ("lighting_ok", "aligned", "texture_ok")):
+            raise HTTPException(422, f"Sample {idx+1} must contain exactly one aligned, well-lit, sharp face")
+        if not faces[0].get("is_live", True):
+            raise HTTPException(422, f"Sample {idx+1} rejected: Presentation attack detected (PAD)")
+
+        sample_crops.append(faces[0]["crop"])
+        landmarks_list.append(faces[0].get("landmarks"))
+        reports.append(report)
+
+    # If single image provided, replicate to satisfy 5-sample requirement
+    if len(sample_crops) == 1:
+        base_crop = sample_crops[0]
+        base_lm = landmarks_list[0]
+        sample_crops = [base_crop] * 5
+        landmarks_list = [base_lm] * 5
+
+    template_blob = default_biometric_service.create_multisample_template(
+        person_id,
+        sample_crops,
+        landmarks_list
+    )
+    return template_blob, sample_crops[0], reports[0]
+
+
 @app.post("/api/enrollment")
+@app.post("/api/enroll")
 def enroll(body: Enrollment, user=Depends(admin)):
     rate_limit("enroll:" + user["id"], 20)
     try:
@@ -366,25 +415,7 @@ def enroll(body: Enrollment, user=Depends(admin)):
         if any(p["id"] == person_id for p in store.personnel()):
             raise HTTPException(409, "Personnel ID already enrolled")
 
-        sample_crops = []
-        if body.samples and len(body.samples) >= 5:
-            for s_img in body.samples:
-                frame, _ = decode(s_img)
-                faces, report = inspect(frame)
-                if not faces or len(faces) != 1 or not all(report[k] for k in ("lighting_ok", "aligned", "texture_ok")):
-                    raise HTTPException(422, "Each sample must contain one aligned, well-lit, sharp face")
-                sample_crops.append(faces[0]["crop"])
-            template_blob = default_biometric_service.create_multisample_template(person_id, sample_crops)
-            primary_crop = sample_crops[0]
-        elif body.image:
-            frame, _ = decode(body.image)
-            faces, report = inspect(frame)
-            if not all(report[k] for k in ("lighting_ok", "aligned", "texture_ok")) or len(faces) != 1:
-                raise HTTPException(422, "One aligned, well-lit, sharp face is required")
-            template_blob = template(faces[0], person_id)
-            primary_crop = faces[0]["crop"]
-        else:
-            raise HTTPException(422, "Enrollment image or samples required")
+        template_blob, primary_crop, report = process_enrollment_payload(body, person_id)
 
         person = {
             "id": person_id,
@@ -419,27 +450,22 @@ class RejectionPayload(BaseModel):
 def create_enrollment_request(body: Enrollment, user=Depends(admin)):
     rate_limit("enroll_req:" + user["id"], 20)
     try:
-        frame, _ = decode(body.image)
-        faces, report = inspect(frame)
-        if not all(report[k] for k in ("lighting_ok", "aligned", "texture_ok")) or len(faces) != 1:
-            raise HTTPException(422, "One aligned, well-lit, sharp face is required")
-        if not faces[0].get("is_live", False):
-            raise HTTPException(422, "Enrollment rejected: PAD presentation attack detected")
         store = Store()
         person_id = body.personnel_id.upper()
         if any(p["id"] == person_id for p in store.personnel()):
             raise HTTPException(409, "Personnel ID already enrolled")
 
+        template_blob, primary_crop, report = process_enrollment_payload(body, person_id)
+
         req_id = str(uuid.uuid4())
         baseline_path = f"baselines/{person_id}-{uuid.uuid4()}.enc"
         import cv2
-        ok, crop = cv2.imencode(".png", faces[0]["crop"])
+        ok, crop_enc = cv2.imencode(".png", primary_crop)
         if not ok:
             raise ValueError("Unable to encode baseline")
-        encrypted = seal(crop.tobytes(), "baseline:" + person_id)
+        encrypted = seal(crop_enc.tobytes(), "baseline:" + person_id)
         store.save_blob(baseline_path, encrypted)
 
-        template_blob = template(faces[0], person_id)
         req = {
             "request_id": req_id,
             "user_id": person_id,
@@ -541,7 +567,22 @@ def revoke_identity_endpoint(user_id: str, user=Depends(admin)):
 
 @app.get("/api/personnel")
 def personnel(user=Depends(admin)):
-    return [{k: p[k] for k in ("id", "name", "role", "created_at")} for p in Store().personnel()]
+    from src.vision.biometric_service import default_biometric_service
+    people = Store().personnel()
+    default_biometric_service.load_cache_if_needed(people)
+    cache = default_biometric_service._cache
+    result = []
+    for p in people:
+        row = {k: p[k] for k in ("id", "name", "role", "created_at")}
+        cached = cache.get(p.get("id"))
+        if cached:
+            row["needs_reenrollment"] = getattr(cached, "needs_reenrollment", False)
+            row["model_version"] = getattr(cached, "model_version", "legacy")
+        else:
+            row["needs_reenrollment"] = False
+            row["model_version"] = "unknown"
+        result.append(row)
+    return result
 
 
 @app.delete("/api/personnel")

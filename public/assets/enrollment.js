@@ -224,7 +224,12 @@ async function loadPeople() {
     for (const person of people) {
       const line = document.createElement("div");
       line.className = "config-status";
-      line.textContent = `${person.id} · ${person.name} / ${person.role}`;
+      const extra = person.needs_reenrollment ? " · [RE-ENROLLMENT REQUIRED]" : "";
+      line.textContent = `${person.id} · ${person.name} / ${person.role}${extra}`;
+      if (person.needs_reenrollment) {
+        line.style.borderColor = "rgba(245, 158, 11, 0.4)";
+        line.style.color = "var(--amber, #f59e0b)";
+      }
       list.append(line);
     }
   } catch (error) {

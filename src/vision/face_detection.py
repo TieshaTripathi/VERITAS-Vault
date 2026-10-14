@@ -29,6 +29,9 @@ class DetectedFace:
     pad_signals: Dict[str, Any] = field(default_factory=dict)
     pad_reason_codes: List[str] = field(default_factory=list)
     quality: Any = None
+    raw_landmarks_5: Optional[np.ndarray] = None
+    raw_yunet_row: Optional[np.ndarray] = None
+    source_frame_shape: Optional[Tuple[int, int]] = None
 
 
 class BaseFaceDetector(ABC):
@@ -109,8 +112,152 @@ class OpenCVFaceDetector(BaseFaceDetector):
         return detected
 
 
+class YuNetFaceDetector(BaseFaceDetector):
+    """
+    High-performance YuNet ONNX face detector with 5-point facial landmark extraction.
+    Loads models/face_detection_yunet_2023mar.onnx.
+    Provides sub-25ms face detection and 5-point landmark localization (eyes, nose, mouth corners).
+    """
+
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        score_threshold: float = 0.6,
+        nms_threshold: float = 0.3,
+        top_k: int = 5000
+    ):
+        if model_path is None:
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            candidate = os.path.join(base_dir, "models", "face_detection_yunet_2023mar.onnx")
+            if os.path.isfile(candidate):
+                model_path = candidate
+            else:
+                model_path = os.environ.get("YUNET_MODEL_PATH", "models/face_detection_yunet_2023mar.onnx")
+
+        self.model_path = model_path
+        self.score_threshold = score_threshold
+        self.nms_threshold = nms_threshold
+        self.top_k = top_k
+        self._detector = None
+        self._current_size: Tuple[int, int] = (300, 300)
+
+        if os.path.isfile(self.model_path):
+            self._init_detector()
+
+    def _init_detector(self) -> None:
+        if hasattr(cv2, "FaceDetectorYN"):
+            try:
+                self._detector = cv2.FaceDetectorYN.create(
+                    model=self.model_path,
+                    config="",
+                    input_size=self._current_size,
+                    score_threshold=self.score_threshold,
+                    nms_threshold=self.nms_threshold,
+                    top_k=self.top_k
+                )
+            except Exception:
+                self._detector = None
+
+    def _detect_on_frame(self, frame: np.ndarray) -> List[DetectedFace]:
+        if frame is None or frame.size == 0 or self._detector is None:
+            return []
+
+        h_frame, w_frame = frame.shape[:2]
+        if self._current_size != (w_frame, h_frame):
+            self._current_size = (w_frame, h_frame)
+            self._detector.setInputSize((w_frame, h_frame))
+
+        ret, faces = self._detector.detect(frame)
+        if faces is None or len(faces) == 0:
+            return []
+
+        detected: List[DetectedFace] = []
+        for face in faces:
+            conf = float(face[14])
+            if conf < self.score_threshold:
+                continue
+
+            x = int(round(face[0]))
+            y = int(round(face[1]))
+            w = int(round(face[2]))
+            h = int(round(face[3]))
+
+            x1 = max(0, x)
+            y1 = max(0, y)
+            x2 = min(w_frame, x + w)
+            y2 = min(h_frame, y + h)
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            crop = frame[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+
+            gray_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+            norm_crop = cv2.resize(gray_crop, (112, 112))
+            var = float(cv2.Laplacian(norm_crop, cv2.CV_64F).var())
+
+            # 5-point landmarks: right_eye, left_eye, nose, right_mouth, left_mouth
+            landmarks: Dict[str, Tuple[float, float]] = {
+                "right_eye": (float(face[4]), float(face[5])),
+                "left_eye": (float(face[6]), float(face[7])),
+                "nose": (float(face[8]), float(face[9])),
+                "right_mouth": (float(face[10]), float(face[11])),
+                "left_mouth": (float(face[12]), float(face[13])),
+            }
+
+            detected.append(DetectedFace(
+                bbox=(int(x1), int(y1), int(x2 - x1), int(y2 - y1)),
+                crop=crop,
+                confidence=conf,
+                landmarks=landmarks,
+                variance=var,
+                raw_landmarks_5=face[4:14].reshape((5, 2)),
+                raw_yunet_row=face,
+                source_frame_shape=frame.shape[:2]
+            ))
+
+        return detected
+
+    def detect_faces(self, frame: np.ndarray) -> List[DetectedFace]:
+        if frame is None or frame.size == 0:
+            return []
+
+        if self._detector is None:
+            if os.path.isfile(self.model_path):
+                self._init_detector()
+            if self._detector is None:
+                return OpenCVFaceDetector().detect_faces(frame)
+
+        # 1. Primary pass on standard upright orientation
+        detected = self._detect_on_frame(frame)
+        if detected:
+            return detected
+
+        # 2. Secondary orientation passes (supports tilted cameras or users reclining)
+        for rot_code in (cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_90_CLOCKWISE):
+            rot_frame = cv2.rotate(frame, rot_code)
+            rot_detected = self._detect_on_frame(rot_frame)
+            if rot_detected:
+                return rot_detected
+
+        return []
+
+
 @lru_cache(maxsize=1)
 def get_default_detector() -> BaseFaceDetector:
     """Factory to retrieve the active face detector instance."""
-    detector_type = os.environ.get("VAULT_FACE_DETECTOR", "opencv").lower()
+    detector_type = os.environ.get("VAULT_FACE_DETECTOR", "").lower()
+    if detector_type == "opencv":
+        return OpenCVFaceDetector()
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    yunet_path = os.path.join(base_dir, "models", "face_detection_yunet_2023mar.onnx")
+    if os.path.isfile(yunet_path) and hasattr(cv2, "FaceDetectorYN"):
+        try:
+            return YuNetFaceDetector(model_path=yunet_path)
+        except Exception:
+            pass
     return OpenCVFaceDetector()
+

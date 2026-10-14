@@ -69,7 +69,7 @@ def evaluate_quality(
             reason_codes=["NO_FACE"]
         )
 
-    h_frame, w_frame = frame_shape[:2]
+    h_frame, w_frame = getattr(detected_face, "source_frame_shape", None) or frame_shape[:2]
     x, y, w, h = detected_face.bbox
     crop = detected_face.crop
 
@@ -87,7 +87,14 @@ def evaluate_quality(
     size_ok = (w >= cfg.min_face_size_pixels and face_ratio >= cfg.min_face_size_ratio and face_ratio <= cfg.max_face_size_ratio)
     
     # Check if face is clipped at borders
-    not_clipped = (x > 2 and y > 2 and (x + w) < (w_frame - 2) and (y + h) < (h_frame - 2))
+    if detected_face.landmarks and len(detected_face.landmarks) >= 5:
+        lm_pts = list(detected_face.landmarks.values())
+        not_clipped = all(
+            2 <= pt[0] < (w_frame - 2) and 2 <= pt[1] < (h_frame - 2)
+            for pt in lm_pts
+        )
+    else:
+        not_clipped = (x > 2 and y > 2 and (x + w) < (w_frame - 2) and (y + h) < (h_frame - 2))
 
     # Pose estimation: yaw, pitch, roll
     pose_ok = True
@@ -96,9 +103,10 @@ def evaluate_quality(
         if detected_face.landmarks and "left_eye" in detected_face.landmarks and "right_eye" in detected_face.landmarks:
             le = detected_face.landmarks["left_eye"]
             re = detected_face.landmarks["right_eye"]
-            dx = float(re[0] - le[0])
-            dy = float(re[1] - le[1])
-            roll = math.degrees(math.atan2(dy, max(dx, 1e-5)))
+            # In image space, right eye is to the left (smaller x), left eye is to the right (larger x)
+            dx = float(le[0] - re[0])
+            dy = float(le[1] - re[1])
+            roll = math.degrees(math.atan2(dy, dx if abs(dx) > 1e-5 else 1e-5))
             if "nose" in detected_face.landmarks:
                 nose = detected_face.landmarks["nose"]
                 d_left = abs(nose[0] - le[0])
@@ -116,7 +124,9 @@ def evaluate_quality(
                 yaw = (abs(l_mean - r_mean) / max(l_mean + r_mean, 1e-5)) * 45.0
                 pitch = (abs(t_mean - b_mean) / max(t_mean + b_mean, 1e-5)) * 30.0
 
-        if yaw > cfg.max_pose_angle_deg or pitch > cfg.max_pose_angle_deg or abs(roll) > cfg.max_pose_angle_deg:
+        has_5pt = getattr(detected_face, "raw_landmarks_5", None) is not None
+        roll_exceeded = (abs(roll) > cfg.max_pose_angle_deg) if not has_5pt else False
+        if yaw > cfg.max_pose_angle_deg or pitch > cfg.max_pose_angle_deg or roll_exceeded:
             pose_ok = False
             reasons.append("EXCESSIVE_POSE")
 

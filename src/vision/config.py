@@ -12,11 +12,14 @@ import os
 class BiometricConfig:
     # Recognition Thresholds
     # Cosine similarity >= recognition_threshold -> VERIFIED
-    recognition_threshold: float = float(os.environ.get("VAULT_RECOGNITION_THRESHOLD", "0.75"))
+    recognition_threshold: float = float(os.environ.get("VAULT_RECOGNITION_THRESHOLD", "0.55"))
     
     # Cosine similarity in [possible_match_threshold, recognition_threshold) -> POSSIBLE_MATCH
     # POSSIBLE_MATCH never grants authorization; prompts user to hold still / adjust
-    possible_match_threshold: float = float(os.environ.get("VAULT_POSSIBLE_MATCH_THRESHOLD", "0.65"))
+    possible_match_threshold: float = float(os.environ.get("VAULT_POSSIBLE_MATCH_THRESHOLD", "0.40"))
+
+    # Top-2 candidate separation margin requirement
+    margin_threshold: float = float(os.environ.get("VAULT_MARGIN_THRESHOLD", "0.06"))
 
     # Temporal Consensus Settings
     # Minimum consistent matches out of last consensus_window_size observations to declare VERIFIED
@@ -44,14 +47,14 @@ class BiometricConfig:
     min_face_size_pixels: int = 60
     min_face_size_ratio: float = 0.15
     max_face_size_ratio: float = 0.85
-    min_sharpness_var: float = 45.0
+    min_sharpness_var: float = float(os.environ.get("VAULT_MIN_SHARPNESS_VAR", "20.0"))
     min_brightness: float = 40.0
     max_brightness: float = 225.0
     max_pose_angle_deg: float = 25.0
 
     # Model & Feature Settings
     embedding_dim: int = 512
-    model_version: str = "VERITAS-BIOMETRIC-v2.0"
+    model_version: str = os.environ.get("VAULT_BIOMETRIC_MODEL_VERSION", "mbf_onnx_v2")
 
 
 # Global default configuration instance

@@ -85,7 +85,7 @@ def advance(state, faces, now, digest=None):
     for face in faces:
         if not face.get("is_recognized") or not face.get("is_live"):
             continue
-        if any(p["id"] == face["id"] for p in result["parties"]):
+        if any(p["id"] == face["id"] for p in result["parties"]) or any(nf["id"] == face["id"] for nf in new_faces):
             duplicate_first = True
         else:
             new_faces.append(face)

@@ -66,6 +66,15 @@ class ModelRegistry:
                 metric="cosine",
                 default_threshold=0.68,
                 status=ModelLifecycleStatus.ACTIVE
+            ),
+            "mobilefacenet_v2": BiometricModelMetadata(
+                model_id="mobilefacenet_v2",
+                provider="mobilefacenet",
+                model_version="mbf_onnx_v2",
+                embedding_dimension=512,
+                metric="cosine",
+                default_threshold=0.55,
+                status=ModelLifecycleStatus.ACTIVE
             )
         }
 
