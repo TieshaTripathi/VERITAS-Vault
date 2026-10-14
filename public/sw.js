@@ -1,4 +1,4 @@
-const CACHE = "veritas-shell-v4.1.0";
+const CACHE = "veritas-shell-v4.2.0";
 const SHELL = [
   "/checkpoint",
   "/enrollment",
@@ -93,23 +93,39 @@ self.addEventListener("push", (event) => {
     data: {
       event_id: event_id,
       url: targetUrl,
+      received_at: Date.now(),
       ...payload,
     },
   };
 
-  if (self.registration && self.registration.showNotification) {
-    event.waitUntil(self.registration.showNotification(title, options));
-  }
+  // Device-side delivery confirmation back to backend
+  const receiptPromise = event_id
+    ? fetch("/api/push/receipt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: event_id,
+          device_label: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent)
+            ? "Mobile Monitor Phone"
+            : "Installed PWA Device",
+        }),
+      }).catch(() => {})
+    : Promise.resolve();
+
+  const notifyPromise =
+    self.registration && self.registration.showNotification
+      ? self.registration.showNotification(title, options)
+      : Promise.resolve();
+
+  event.waitUntil(Promise.all([receiptPromise, notifyPromise]));
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+  const event_id = event.notification.data && event.notification.data.event_id;
   const targetUrl =
-    event.notification.data && event.notification.data.url
-      ? event.notification.data.url
-      : event.notification.data && event.notification.data.event_id
-        ? `/audit?event=${encodeURIComponent(event.notification.data.event_id)}`
-        : "/audit";
+    (event.notification.data && event.notification.data.url) ||
+    (event_id ? `/audit?event=${encodeURIComponent(event_id)}` : "/audit");
 
   event.waitUntil(
     clients
@@ -117,16 +133,11 @@ self.addEventListener("notificationclick", (event) => {
       .then((clientList) => {
         for (const client of clientList) {
           if ("focus" in client) {
-            if (
-              client.url.includes("/audit") ||
-              client.url.includes("/checkpoint")
-            ) {
-              client.focus();
-              if ("navigate" in client && targetUrl) {
-                return client.navigate(targetUrl);
-              }
-              return client;
+            client.focus();
+            if ("navigate" in client && targetUrl) {
+              return client.navigate(targetUrl);
             }
+            return client;
           }
         }
         if (clients.openWindow) {

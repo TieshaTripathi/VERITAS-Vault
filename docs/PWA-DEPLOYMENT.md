@@ -77,20 +77,65 @@ The Python lockfile prevents deployment from resolving different package version
    `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` if these integrations are used.
 4. Provision Supabase before sending checkpoint traffic.
 5. Deploy: `npx vercel --prod`.
-6. Verify `/api/health`, operator login, enrollment, custody timeout, evidence
-   download, and alert delivery against that deployment.
+6. Verify `/api/health` (liveness), `/api/health/ready` (readiness), operator login,
+   enrollment, custody timeout, evidence download, and alert delivery against that deployment.
 
 Environment variables are read server-side by name; secrets are intentionally
 not embedded in `vercel.json` or committed as legacy `@secret` bindings.
 The Control Room can update alert credentials encrypted at rest, but cannot
 replace the root Supabase connection or master encryption key through an HTTP form.
 
-The one-minute recovery cron requires a Vercel plan that permits that frequency.
-For a plan without it, use a trusted external scheduler to call `/api/worker`
-with `Authorization: Bearer <CRON_SECRET>`, or run `python scripts/worker.py`
-on an always-on edge host. Do not weaken cron authentication or fall back to
-ephemeral serverless SQLite. When Supabase is configured but unreachable, the
-API fails closed; SQLite is used only in local mode when both cloud keys are absent.
+## Health checks and deployment probes (Render / Docker / Vercel)
+
+The service provides distinct endpoints for liveness vs. dependency readiness:
+
+- **Liveness Probe**: `GET /api/health`
+  - Instant (O(1)), lightweight check that returns JSON with status `"healthy"`, git commit, and system time.
+  - Recommended for Render / Kubernetes liveness probes where network hiccups to downstream databases should not cause process restarts.
+- **Readiness Probe**: `GET /api/health/ready` (or `GET /api/ready`)
+  - Validates full service readiness: database connectivity via `store.check_connectivity(timeout=3.0)`, biometrics detector/extractor state, and notification configuration.
+  - Returns HTTP 200 with `status: "ready"`, or HTTP 503 with details if dependencies are unreachable.
+
+## External Worker Scheduling & Outbox Draining
+
+Alert jobs use an asynchronous outbox pattern to prevent video checkpoint slowdowns.
+Delivery transitions follow: `QUEUED` -> `SENT` -> `RETRYING` -> `FAILED`, with device-side confirmation marking `DEVICE_CONFIRMED`.
+
+The worker (`/api/worker`) claims queued jobs and re-attempts failed deliveries with exponential backoff:
+
+1. **Render Cron Jobs / Docker Edge Hosts**:
+   Configure a background cron container or scheduled job:
+   ```bash
+   curl -X POST https://<your-domain>/api/worker \
+     -H "Authorization: Bearer ${CRON_SECRET}"
+   ```
+2. **cron-job.org / External Webhook Schedulers**:
+   - URL: `https://<your-domain>/api/worker`
+   - Method: `POST`
+   - Header: `Authorization: Bearer <CRON_SECRET>`
+   - Schedule: Every 1 to 5 minutes.
+3. **GitHub Actions Workflow (.github/workflows/worker-cron.yml)**:
+   ```yaml
+   name: Drain Vault Alert Outbox
+   on:
+     schedule:
+       - cron: '*/5 * * * *'
+     workflow_dispatch:
+   jobs:
+     drain:
+       runs-on: ubuntu-latest
+       steps:
+         - name: Trigger Worker
+           run: |
+             curl -f -s -X POST "${{ secrets.APP_ORIGIN }}/api/worker" \
+               -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
+   ```
+4. **Standalone Edge Daemon**:
+   Run `python scripts/worker.py` on an edge machine with the same environment.
+
+Do not weaken cron authentication or fall back to ephemeral serverless SQLite. When
+Supabase is configured but unreachable, the API fails closed with bounded retries; SQLite
+is used only in local mode when both cloud keys are absent.
 
 ## Verification and alert semantics
 

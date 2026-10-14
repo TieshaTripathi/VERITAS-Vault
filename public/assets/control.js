@@ -122,6 +122,14 @@ async function load() {
           ? "SECURITY NOTIFICATIONS ACTIVE ✓"
           : "ENABLE SECURITY NOTIFICATIONS";
       }
+
+      // Outbox delivery pipeline tracking
+      if (result.delivery_summary) {
+        if ($("#track-queued")) $("#track-queued").textContent = String(result.delivery_summary.QUEUED || 0);
+        if ($("#track-sent")) $("#track-sent").textContent = String(result.delivery_summary.SENT || 0);
+        if ($("#track-retrying")) $("#track-retrying").textContent = String(result.delivery_summary.RETRYING || 0);
+        if ($("#track-failed")) $("#track-failed").textContent = String(result.delivery_summary.FAILED || 0);
+      }
     } catch (pushErr) {
       console.warn("Failed to retrieve push status:", pushErr);
     }

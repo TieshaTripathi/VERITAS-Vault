@@ -210,10 +210,28 @@ CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
 </div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section></div>
 <div class="stack"><section class="panel" id="push-panel"><div class="panel-head"><h2 class="section-label">PWA REMOTE ALERTS</h2><span class="badge" id="control-push-badge">NOT SUBSCRIBED</span></div>
-<div class="config-grid" style="margin-bottom:16px;">
+<div class="config-grid" style="margin-bottom:12px;">
   <div class="config-status">Web Push<strong id="control-push-status" style="font-size:14px;">STANDBY</strong></div>
   <div class="config-status">Active Devices<span id="control-push-devices">0</span></div>
   <div class="config-status">Permission<span id="control-push-perm">DEFAULT</span></div>
+</div>
+<div class="delivery-tracking-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;text-align:center;">
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">QUEUED</div>
+    <strong id="track-queued" style="font-size:13px;color:#f59e0b;">0</strong>
+  </div>
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">SENT</div>
+    <strong id="track-sent" style="font-size:13px;color:#10b981;">0</strong>
+  </div>
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">RETRYING</div>
+    <strong id="track-retrying" style="font-size:13px;color:#38bdf8;">0</strong>
+  </div>
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">FAILED</div>
+    <strong id="track-failed" style="font-size:13px;color:#ef4444;">0</strong>
+  </div>
 </div>
 <div class="form-actions" style="display:flex;gap:10px;flex-direction:column;">
   <button type="button" id="btn-enable-push" class="primary" style="width:100%;">ENABLE SECURITY NOTIFICATIONS</button>

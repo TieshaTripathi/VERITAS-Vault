@@ -113,20 +113,26 @@ def valid_push_endpoint(endpoint):
 
 
 def get_active_subscriptions(store):
-    """Retrieve active subscriptions from Supabase push_subscriptions table and local records."""
+    """Retrieve active genuine Web Push subscriptions from Supabase and local records.
+    Filters out corrupted or dummy tokens and deduplicates subscriptions by endpoint.
+    """
     subs = {}
     if getattr(store, "cloud", None):
         try:
             cloud_rows = store.cloud.rows("push_subscriptions", enabled="eq.true")
             for row in cloud_rows:
-                ep = row["endpoint"]
+                ep = row.get("endpoint", "")
+                p256dh = row.get("p256dh", "")
+                auth = row.get("auth", "")
+                if not ep or not valid_push_endpoint(ep) or p256dh == "fcm_token" or auth == "fcm_token" or not p256dh or not auth:
+                    continue
                 k = "push:" + hashlib.sha256(ep.encode()).hexdigest()
                 subs[k] = {
                     "subscription": {
                         "endpoint": ep,
                         "keys": {
-                            "p256dh": row["p256dh"],
-                            "auth": row["auth"],
+                            "p256dh": p256dh,
+                            "auth": auth,
                         },
                     },
                     "owner": row.get("user_id", "operator"),
@@ -138,7 +144,13 @@ def get_active_subscriptions(store):
 
     for k, v, _ in store.records("push:"):
         if v.get("active") and k not in subs:
-            subs[k] = v
+            sub_dict = v.get("subscription", {})
+            ep = sub_dict.get("endpoint", "")
+            keys = sub_dict.get("keys", {})
+            p256dh = keys.get("p256dh", "")
+            auth = keys.get("auth", "")
+            if ep and valid_push_endpoint(ep) and p256dh != "fcm_token" and auth != "fcm_token" and p256dh and auth:
+                subs[k] = v
     return list(subs.items())
 
 
@@ -535,10 +547,13 @@ def deliver(key, job, version):
     elif not configured:
         job_status = "UNCONFIGURED"
         done = False
-    elif "telegram" in delivered or (not errors and (push_ready or whatsapp_ready)):
-        job_status = "TELEGRAM_SENT" if tg_cfg["configured"] else "ACCEPTED_BY_PROVIDER"
+    elif "telegram" in delivered and not push_ready:
+        job_status = "TELEGRAM_SENT"
         done = True
-    elif "telegram" in errors:
+    elif "telegram" in delivered or (not errors and (push_ready or whatsapp_ready)):
+        job_status = "SENT"
+        done = True
+    elif "telegram" in errors and not push_ready:
         if attempts < max_retries:
             job_status = "TELEGRAM_RETRYING"
             done = False
@@ -549,7 +564,7 @@ def deliver(key, job, version):
         job_status = "RETRY" if attempts < max_retries else "FAILED"
         done = attempts >= max_retries
     else:
-        job_status = "TELEGRAM_SENT" if "telegram" in delivered else "ACCEPTED_BY_PROVIDER"
+        job_status = "SENT"
         done = True
 
     job.update(
@@ -561,6 +576,25 @@ def deliver(key, job, version):
         status=job_status,
     )
     store.cas(key, version + 1, job)
+
+
+def get_outbox_summary(store=None) -> dict:
+    """Computes delivery pipeline tracking counts across all outbox alert jobs."""
+    store = store or Store()
+    jobs = [v for _, v, _ in store.records("job:")]
+    queued = sum(1 for j in jobs if not j.get("done") and j.get("status") in ("QUEUED", "PENDING", "UNCONFIGURED"))
+    sent = sum(1 for j in jobs if j.get("status") in ("SENT", "TELEGRAM_SENT", "ACCEPTED_BY_PROVIDER"))
+    retrying = sum(1 for j in jobs if j.get("status") in ("RETRY", "RETRYING", "TELEGRAM_RETRYING"))
+    failed = sum(1 for j in jobs if j.get("status") in ("FAILED", "TELEGRAM_FAILED"))
+    device_confirmed = sum(1 for j in jobs if j.get("device_received") is True)
+    return {
+        "QUEUED": queued,
+        "SENT": sent,
+        "RETRYING": retrying,
+        "FAILED": failed,
+        "DEVICE_CONFIRMED": device_confirmed,
+        "total": len(jobs),
+    }
 
 
 def send_test_push(store=None):

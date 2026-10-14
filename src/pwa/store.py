@@ -49,6 +49,37 @@ class Store:
         finally:
             conn.close()
 
+    def check_connectivity(self, timeout: float = 3.0) -> dict:
+        """Tests database connectivity with strict timeout."""
+        t0 = time.perf_counter()
+        if self.cloud:
+            ok = self.cloud.check_health(timeout=timeout)
+            ms = round((time.perf_counter() - t0) * 1000, 2)
+            return {
+                "engine": "Supabase",
+                "connected": ok,
+                "latency_ms": ms,
+                "status": "HEALTHY" if ok else "UNAVAILABLE",
+            }
+        else:
+            try:
+                with self.db() as conn:
+                    conn.execute("SELECT 1").fetchone()
+                ms = round((time.perf_counter() - t0) * 1000, 2)
+                return {
+                    "engine": "SQLite",
+                    "connected": True,
+                    "latency_ms": ms,
+                    "status": "HEALTHY",
+                }
+            except Exception as e:
+                return {
+                    "engine": "SQLite",
+                    "connected": False,
+                    "error": str(e),
+                    "status": "UNAVAILABLE",
+                }
+
     def get(self, key):
         if self.cloud:
             rows = self.cloud.rows("vault_records", id=f"eq.{key}", select="payload,version")

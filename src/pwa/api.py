@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Any, Dict, Optional, List
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ from src.pwa.alerts import (
     ensure_vapid_keys,
     get_active_subscriptions,
     get_last_telegram_status,
+    get_outbox_summary,
     get_telegram_config,
     get_telegram_diagnostic_status,
     send_test_push,
@@ -216,8 +217,16 @@ def login(body: Credentials, request: Request, response: Response):
             and (pwd in ("test-only-password-strong", "vault-operator-password") or (admin_hash and check_password(pwd, admin_hash))))
     )
 
+    user_rec, _ = store.get("user:" + uname)
     if is_admin_user:
         saved = {"id": "local-admin", "name": body.username, "role": "admin", "expires": time.time() + 3600}
+    elif user_rec and user_rec.get("password_hash") and check_password(pwd, user_rec["password_hash"]):
+        saved = {
+            "id": user_rec.get("id", "user-" + uname),
+            "name": user_rec.get("name", body.username),
+            "role": user_rec.get("role", "operator"),
+            "expires": time.time() + 3600,
+        }
     elif store.cloud:
         # 2. Attempt Supabase Cloud Auth if configured
         try:
@@ -299,13 +308,50 @@ def get_git_commit():
 
 @app.get("/api/health")
 def health():
+    """Lightweight application liveness check for Render / health monitors."""
     return {
+        "status": "healthy",
         "service": "VERITAS",
         "version": "3.0.0",
         "cloud_configured": bool(os.environ.get("SUPABASE_URL")),
         "auth_configured": bool(os.environ.get("SUPABASE_URL") or os.environ.get("VAULT_OPERATOR_PASSWORD_HASH")),
         "encryption_configured": bool(os.environ.get("VAULT_ENCRYPTION_KEY")),
         "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")),
+        "commit": get_git_commit(),
+        "timestamp": utc(),
+    }
+
+
+@app.get("/api/health/ready")
+@app.get("/api/ready")
+def readiness(response: Response):
+    """Dependency readiness check evaluating database connectivity and model assets."""
+    store = Store()
+    db_check = store.check_connectivity(timeout=3.0)
+    from src.vision.biometric_service import default_biometric_service
+    biometrics_ready = hasattr(default_biometric_service, "detector") and default_biometric_service.detector is not None
+    active_version = getattr(default_biometric_service.embedding_extractor, "version", "unknown")
+    cfg = ensure_vapid_keys(store)
+    active_subs = get_active_subscriptions(store)
+
+    is_ready = db_check["connected"] and biometrics_ready
+    if not is_ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return {
+        "status": "ready" if is_ready else "degraded",
+        "timestamp": utc(),
+        "database": db_check,
+        "biometrics": {
+            "ready": biometrics_ready,
+            "model_version": active_version,
+            "cache_loaded": default_biometric_service._cache_loaded,
+            "enrolled_count": len(default_biometric_service._cache),
+        },
+        "notifications": {
+            "vapid_configured": bool(cfg.get("VAPID_PUBLIC_KEY")),
+            "active_subscriptions": len(active_subs),
+        },
         "commit": get_git_commit(),
     }
 
@@ -1061,12 +1107,14 @@ def control(user=Depends(admin)):
     store = Store()
     active_subs = get_active_subscriptions(store)
     tg_cfg = get_telegram_config()
+    outbox_summary = get_outbox_summary(store)
     return {
         "storage": "Supabase" if store.cloud else "SQLite local",
         "facenet": bool(os.environ.get("FACENET_MODEL_PATH")),
         "telegram_configured": tg_cfg["configured"],
         "subscriptions_count": len(active_subs),
         "audit_verified": True,
+        "delivery_summary": outbox_summary,
         "outbox": [v for _, v, _ in store.records("job:")][-30:],
     }
 
@@ -1077,11 +1125,13 @@ def alerts_status(user=Depends(monitor_or_above)):
     active_subs = get_active_subscriptions(store)
     tg_cfg = get_telegram_config()
     last_status = get_last_telegram_status(store)
+    outbox_summary = get_outbox_summary(store)
     return {
         "telegram_configured": tg_cfg["configured"],
         "last_telegram_status": last_status,
         "push_configured": bool(ensure_vapid_keys(store).get("VAPID_PUBLIC_KEY")),
         "subscriptions_count": len(active_subs),
+        "delivery_summary": outbox_summary,
     }
 
 
@@ -1216,19 +1266,26 @@ def register_fcm_token(body: FCMTokenRegistration, user=Depends(monitor_or_above
         "created_at": utc(),
     }
     store.put(key, fcm_data)
-    if store.cloud:
-        try:
-            store.cloud.request("POST", "/rest/v1/push_subscriptions", json={
-                "user_id": user["id"],
-                "endpoint": f"https://fcm.googleapis.com/fcm/send/{token}",
-                "p256dh": "fcm_token",
-                "auth": "fcm_token",
-                "device_label": body.device_label or "Mobile Monitor Phone",
-                "enabled": True,
-            }, params={"on_conflict": "endpoint"}, headers={"Prefer": "resolution=merge-duplicates"})
-        except Exception as exc:
-            logger.warning("Failed to record FCM token in Supabase: %s", exc)
     return {"registered": True, "provider": "FCM", "device_label": body.device_label}
+
+
+class PushReceipt(BaseModel):
+    event_id: str = Field(max_length=128)
+    device_label: str = Field(default="Mobile Monitor Phone", max_length=128)
+
+
+@app.post("/api/push/receipt")
+def record_push_receipt(body: PushReceipt):
+    """Device-side confirmation that notification was actually displayed/received on phone."""
+    store = Store()
+    key = f"job:{body.event_id}"
+    job, ver = store.get(key)
+    if job:
+        job["device_received"] = True
+        job["device_received_at"] = utc()
+        job["device_label"] = body.device_label
+        store.cas(key, ver, job)
+    return {"status": "CONFIRMED", "event_id": body.event_id}
 
 
 @app.get("/api/worker")
