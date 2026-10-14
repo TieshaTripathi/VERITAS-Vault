@@ -152,8 +152,9 @@ def test_model_registry_includes_mbf_onnx_v2():
 # 3. MODEL VERSION CHECK & SAFE RE-ENROLLMENT TESTS
 # ---------------------------------------------------------------------------
 
-def test_legacy_model_templates_flagged_for_safe_reenrollment():
+def test_legacy_model_templates_flagged_for_safe_reenrollment(monkeypatch):
     """Ensure older model templates (e.g. legacy-512d) are flagged and not matched against mbf_onnx_v2."""
+    monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"K" * 32).decode())
     service = BiometricService()
     # Force active extractor to mbf_onnx_v2
     service.embedding_extractor.version = "mbf_onnx_v2"
