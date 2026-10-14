@@ -20,8 +20,19 @@ jobs:
       - name: Build frontend shell
         run: python scripts/build_shell.py
       - name: Run full test suite
-        run: python -m pytest --basetemp=.pytest_tmp -q -p no:cacheprovider
+        run: |
+          python -m pytest --basetemp=.pytest_tmp -v --tb=short -p no:cacheprovider 2>&1 | tee test_report.txt
+      - name: Publish Test Summary
+        if: always()
+        run: |
+          if [ -f test_report.txt ]; then
+            echo "### Pytest Execution Summary" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 120 test_report.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
       - name: Check JavaScript syntax
         run: |
           for file in public/assets/*.js public/sw.js; do node --check "$file"; done
       - run: git diff --exit-code -- public/checkpoint public/enrollment public/logs public/control
+
