@@ -1,5 +1,6 @@
 """Durable alert outbox with bounded concurrent delivery and retry leases.
-Telegram alerts are strictly configured via Render environment variables.
+Pushover is the primary breach notification service, configured via Render environment variables.
+Telegram and Web Push alerts are retained as secondary/legacy fallback channels.
 """
 import base64
 import hashlib
@@ -45,6 +46,36 @@ def get_cached_evidence_photo(path: str) -> Optional[bytes]:
 CRITICAL_BREACH_CODES = frozenset({"ZT-001", "ZT-002", "ZT-008", "ZT-009", "ZT-013"})
 
 
+def get_pushover_config() -> dict:
+    """Retrieve Pushover credentials strictly from Render environment variables.
+    Never expose the App Token or User Key to client storage or frontend overrides.
+    """
+    token = os.environ.get("PUSHOVER_APP_TOKEN", "").strip()
+    user = os.environ.get("PUSHOVER_USER_KEY", "").strip()
+    return {
+        "token": token,
+        "user": user,
+        "configured": bool(token and user),
+    }
+
+
+def get_last_pushover_status(store=None) -> str:
+    """Returns 'SENT', 'FAILED', or 'NEVER'."""
+    store = store or Store()
+    record, _ = store.get("pushover:last_status")
+    if record and record.get("status"):
+        return record["status"]
+    return "NEVER"
+
+
+def record_last_pushover_status(store, status: str):
+    store = store or Store()
+    store.put("pushover:last_status", {
+        "status": status,
+        "updated_at": time.time(),
+    })
+
+
 def get_telegram_config() -> dict:
     """Retrieve Telegram credentials ONLY from Render environment variables.
     Never expose the Bot Token to client storage or frontend overrides.
@@ -79,7 +110,10 @@ def settings(store):
     saved, _ = store.get("config:alerts")
     overrides = json.loads(unseal(base64.b64decode(saved["encrypted"]), "settings")) if saved else {}
     tg = get_telegram_config()
+    po = get_pushover_config()
     return {
+        "PUSHOVER_APP_TOKEN": po["token"],
+        "PUSHOVER_USER_KEY": po["user"],
         "TELEGRAM_BOT_TOKEN": tg["token"],
         "TELEGRAM_CHAT_ID": tg["chat_id"],
         "CALLMEBOT_PHONE": overrides.get("CALLMEBOT_PHONE", os.environ.get("CALLMEBOT_PHONE", "")),
@@ -383,6 +417,173 @@ def send_test_telegram(store=None) -> dict:
         }
 
 
+def send_pushover_alert(
+    reason_code: str,
+    checkpoint: str,
+    timestamp: str,
+    event_id: str,
+    reason_text: str = None,
+    config: dict = None,
+) -> dict:
+    """Deliver critical breach notification via official Pushover Messages API.
+    Never transmits raw biometric data, private keys, or unprotected evidence.
+    """
+    po_cfg = config or get_pushover_config()
+    token = po_cfg.get("token", "").strip()
+    user_key = po_cfg.get("user", "").strip()
+    if not (token and user_key):
+        raise ValueError("Pushover APP token or user key not configured in environment variables")
+
+    base_url = (os.environ.get("APP_ORIGIN") or os.environ.get("APP_BASE_URL") or "https://veritas-vault14.web.app").rstrip("/")
+    audit_link = f"{base_url}/audit?event={event_id}" if event_id else f"{base_url}/audit"
+
+    desc = reason_text or f"Critical security breach detected: {reason_code}"
+    message = (
+        f"🚨 CRITICAL BREACH DETECTED: {reason_code}\n\n"
+        f"Checkpoint: {checkpoint}\n"
+        f"Timestamp: {timestamp}\n"
+        f"Reason: {desc}\n"
+        f"Audit Link: {audit_link}"
+    )
+
+    data = {
+        "token": token,
+        "user": user_key,
+        "title": f"🚨 VERITAS BREACH: {reason_code}",
+        "message": message,
+        "url": audit_link,
+        "url_title": f"Audit Event {event_id}" if event_id else "View Audit Event",
+        "priority": 1,
+        "sound": "siren",
+    }
+    res = httpx.post("https://api.pushover.net/1/messages.json", data=data, timeout=15)
+    try:
+        resp_json = res.json()
+    except Exception:
+        resp_json = {}
+
+    if res.status_code != 200 or resp_json.get("status") != 1:
+        errors = resp_json.get("errors") or [f"HTTP {res.status_code}"]
+        err_msg = ", ".join(errors) if isinstance(errors, list) else str(errors)
+        raise ValueError(f"Pushover API rejected alert: {err_msg}")
+
+    return resp_json
+
+
+def send_test_pushover(store=None) -> dict:
+    """Send an authenticated test notification via Pushover Messages API (admin only)."""
+    store = store or Store()
+    po_cfg = get_pushover_config()
+    token = po_cfg["token"]
+    user_key = po_cfg["user"]
+    if not (token and user_key):
+        return {
+            "ok": False,
+            "sent": False,
+            "error": "Set PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY in Render environment variables.",
+        }
+
+    base_url = (os.environ.get("APP_ORIGIN") or os.environ.get("APP_BASE_URL") or "https://veritas-vault14.web.app").rstrip("/")
+    audit_link = f"{base_url}/audit"
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    data = {
+        "token": token,
+        "user": user_key,
+        "title": "🚨 VERITAS TEST ALERT",
+        "message": (
+            "🚨 VERITAS TEST ALERT\n\n"
+            "Pushover breach notification channel operational.\n"
+            "Checkpoint: CP-MAIN-01\n"
+            f"Timestamp: {now_iso}\n"
+            f"Audit Link: {audit_link}"
+        ),
+        "url": audit_link,
+        "url_title": "Open Vault Audit Ledger",
+        "priority": 0,
+    }
+
+    try:
+        res = httpx.post("https://api.pushover.net/1/messages.json", data=data, timeout=15)
+        resp_json = res.json() if res.content else {}
+        if res.status_code != 200 or resp_json.get("status") != 1:
+            errors = resp_json.get("errors") or [f"HTTP {res.status_code}"]
+            desc = ", ".join(errors) if isinstance(errors, list) else str(errors)
+            record_last_pushover_status(store, "FAILED")
+            return {
+                "ok": False,
+                "sent": False,
+                "error": desc,
+            }
+        record_last_pushover_status(store, "SENT")
+        masked_user = user_key[:4] + "..." + user_key[-4:] if len(user_key) > 8 else "***"
+        return {
+            "ok": True,
+            "sent": True,
+            "recipient": masked_user,
+            "request": resp_json.get("request"),
+        }
+    except Exception as exc:
+        record_last_pushover_status(store, "FAILED")
+        return {
+            "ok": False,
+            "sent": False,
+            "error": str(exc),
+        }
+
+
+def get_pushover_diagnostic_status(store=None) -> dict:
+    """Backend Pushover diagnostic endpoint (admin only).
+    Validates token and user key via /users/validate.json without revealing secrets.
+    """
+    store = store or Store()
+    cfg = get_pushover_config()
+    last_status = get_last_pushover_status(store)
+    if not cfg["configured"]:
+        return {
+            "configured": False,
+            "token_valid": False,
+            "user_valid": False,
+            "description": "Set PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY in Render environment variables.",
+            "last_pushover_status": last_status,
+        }
+
+    token = cfg["token"]
+    user = cfg["user"]
+    try:
+        res = httpx.post(
+            "https://api.pushover.net/1/users/validate.json",
+            data={"token": token, "user": user},
+            timeout=10,
+        )
+        data = res.json() if res.content else {}
+        if res.status_code == 200 and data.get("status") == 1:
+            return {
+                "configured": True,
+                "token_valid": True,
+                "user_valid": True,
+                "description": "CONNECTED",
+                "last_pushover_status": last_status,
+            }
+        errors = data.get("errors") or [f"HTTP {res.status_code}"]
+        desc = ", ".join(errors) if isinstance(errors, list) else str(errors)
+        return {
+            "configured": True,
+            "token_valid": "token" not in desc.lower(),
+            "user_valid": "user" not in desc.lower(),
+            "description": desc,
+            "last_pushover_status": last_status,
+        }
+    except Exception as exc:
+        return {
+            "configured": True,
+            "token_valid": False,
+            "user_valid": False,
+            "description": str(exc),
+            "last_pushover_status": last_status,
+        }
+
+
 def send_telegram_photo_alert(caption: str, photo_bytes: bytes = None, filename: str = "intruder.jpg", config: dict = None):
     """Deliver Telegram breach alert with optional photo attached.
     Decrypted photo bytes are handled in memory only.
@@ -428,9 +629,11 @@ def send_telegram_photo_alert(caption: str, photo_bytes: bytes = None, filename:
 
 def deliver(key, job, version):
     """Asynchronously process an outbox alert job.
-    Telegram failures NEVER break access denial, evidence storage, audit log, or siren.
-    Retries failed Telegram alerts with bounded retries.
-    Job status is recorded as TELEGRAM_SENT, TELEGRAM_FAILED, or TELEGRAM_RETRYING.
+    Pushover is the primary notification service for confirmed critical breaches.
+    When Pushover is configured, Telegram, FCM, and legacy Web Push are bypassed
+    to prevent duplicate alerts.
+    Failures NEVER break access denial, evidence storage, audit log, or siren.
+    Retries failed alerts with bounded exponential backoff.
     """
     store = Store()
     if job.get("done") or job.get("next_at", 0) > time.time() or job.get("lease_until", 0) > time.time():
@@ -454,128 +657,152 @@ def deliver(key, job, version):
         or (not is_non_breach and not job.get("reason_code"))
     )
 
-    # Remote Alert: PWA Push Notifications (Active production channel)
     subscriptions = get_active_subscriptions(store)
-    push_ready = bool(config["VAPID_PRIVATE_KEY"] and config["VAPID_PUBLIC_KEY"] and config["VAPID_SUBJECT"] and subscriptions)
-    if push_ready and is_critical_breach and not is_non_breach:
-        from pywebpush import webpush, WebPushException
-        event_id = job.get("id", "")
-        reason_code = job.get("reason_code", "ZT-001")
-        cp_id = job.get("checkpoint", "CP-MAIN-01")
-        body_text = f"Unauthorized identity detected\nCheckpoint: {cp_id}\nAccess: DENIED"
-        if reason_code == "ZT-002":
-            body_text = f"Biometric spoof detected\nCheckpoint: {cp_id}\nAccess: DENIED"
-        elif reason_code == "ZT-008":
-            body_text = f"Custody timeout expired\nCheckpoint: {cp_id}\nAccess: DENIED"
-        elif reason_code == "ZT-009":
-            body_text = f"Replay attack detected\nCheckpoint: {cp_id}\nAccess: DENIED"
-        elif reason_code == "ZT-013":
-            body_text = f"Capture integrity violation\nCheckpoint: {cp_id}\nAccess: DENIED"
-
-        push_payload = json.dumps({
-            "title": "🚨 VERITAS SECURITY BREACH",
-            "body": body_text,
-            "event_id": event_id,
-            "reason_code": reason_code,
-            "checkpoint": cp_id,
-            "url": f"/audit?event={event_id}" if event_id else "/audit",
-            "tag": event_id or "vault-security-breach",
-            "active": True,
-        })
-        for sub_key, sub in subscriptions:
-            if sub_key in delivered:
-                continue
-            try:
-                webpush(subscription_info=sub["subscription"],
-                        data=push_payload,
-                        vapid_private_key=config["VAPID_PRIVATE_KEY"], vapid_claims={"sub": config["VAPID_SUBJECT"]}, timeout=10)
-                delivered.add(sub_key)
-            except WebPushException as exc:
-                if exc.response is not None and exc.response.status_code in (404, 410):
-                    disable_subscription(store, sub_key, sub)
-                else:
-                    errors.append("push")
-            except Exception:
-                errors.append("push")
-    # Optional Legacy Telegram Alert (if configured in environment)
-    tg_cfg = get_telegram_config()
-    if tg_cfg["configured"] and is_critical_breach and "telegram" not in delivered:
-        photo_bytes = None
-        try:
-            ev_path = job.get("evidence_path")
-            ev_hash = job.get("evidence_hash")
-            if not (ev_path and ev_hash):
-                saved_ev, _ = store.get(f"event:{job.get('id', '')}")
-                if saved_ev and saved_ev.get("evidence"):
-                    ev_path = saved_ev["evidence"].get("path")
-                    ev_hash = saved_ev["evidence"].get("sha256")
-            if ev_path:
-                cached_raw = get_cached_evidence_photo(ev_path)
-                if cached_raw:
-                    try:
-                        import cv2
-                        frame_mat = cv2.imdecode(np.frombuffer(cached_raw, np.uint8), cv2.IMREAD_COLOR) if not isinstance(cached_raw, np.ndarray) else cached_raw
-                        if frame_mat is not None:
-                            ok, buf = cv2.imencode(".jpg", frame_mat)
-                            if ok:
-                                photo_bytes = buf.tobytes()
-                    except Exception as c_err:
-                        logger.warning("Could not encode cached frame: %s", c_err)
-                if not photo_bytes and ev_hash:
-                    try:
-                        enc_blob = store.read_blob(ev_path)
-                        photo_bytes = unseal(enc_blob, "evidence:" + ev_hash)
-                    except Exception as dec_err:
-                        logger.warning("Could not decrypt evidence frame for Telegram: %s", dec_err)
-
-            ts = job.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            reason_txt = job.get("reason", "Unauthorized person detected at vault checkpoint")
-            ev_id = job.get("id", "N/A")
-
-            # Exact intruder caption format
-            caption = (
-                "🚨 VERITAS BREACH ALERT\n\n"
-                "Checkpoint: CP-MAIN-01\n"
-                "Access: DENIED\n"
-                f"Reason: {reason_txt}\n"
-                f"Time: {ts}\n"
-                f"Evidence ID: {ev_id}"
-            )
-            send_telegram_photo_alert(caption, photo_bytes, config=tg_cfg)
-            delivered.add("telegram")
-            record_last_telegram_status(store, "SENT")
-        except Exception as exc:
-            logger.warning("Telegram alert delivery failed: %s", exc)
-            errors.append("telegram")
-            record_last_telegram_status(store, "FAILED")
-        finally:
-            # Securely discard decrypted frame bytes from memory immediately
-            del photo_bytes
-            photo_bytes = None
-
-    # Optional legacy fallback: WhatsApp notifications via callmebot
+    push_ready = bool(config.get("VAPID_PRIVATE_KEY") and config.get("VAPID_PUBLIC_KEY") and config.get("VAPID_SUBJECT") and subscriptions)
     whatsapp_ready = bool(config.get("CALLMEBOT_API_KEY") and config.get("CALLMEBOT_PHONE"))
-    if whatsapp_ready and "whatsapp" not in delivered and not is_non_breach:
-        try:
-            response = httpx.get(
-                "https://api.callmebot.com/whatsapp.php",
-                params={
-                    "phone": config["CALLMEBOT_PHONE"],
-                    "apikey": config["CALLMEBOT_API_KEY"],
-                    "text": f"VERITAS security breach. Event {job.get('id', '')}. Review the secure audit ledger.",
-                },
-                timeout=10,
-            )
-            response.raise_for_status()
-            if "error" in response.text.lower():
-                raise ValueError("Provider rejected the alert")
-            delivered.add("whatsapp")
-        except Exception:
-            errors.append("whatsapp")
+    po_cfg = get_pushover_config()
+    tg_cfg = get_telegram_config()
+
+    if is_critical_breach and not is_non_breach:
+        if po_cfg["configured"]:
+            # Primary channel: Pushover Messages API
+            if "pushover" not in delivered:
+                try:
+                    send_pushover_alert(
+                        reason_code=job.get("reason_code", "ZT-001"),
+                        checkpoint=job.get("checkpoint", "CP-MAIN-01"),
+                        timestamp=job.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        event_id=job.get("id", ""),
+                        reason_text=job.get("reason"),
+                        config=po_cfg,
+                    )
+                    delivered.add("pushover")
+                    record_last_pushover_status(store, "SENT")
+                except Exception as exc:
+                    logger.warning("Pushover alert delivery failed: %s", exc)
+                    errors.append("pushover")
+                    record_last_pushover_status(store, "FAILED")
+            # NOTE: When Pushover is configured as primary, Telegram, FCM, and legacy Web Push
+            # are bypassed to guarantee exactly one notification per breach and eliminate duplicate alerts.
+        else:
+            # Fallback alert channels when Pushover is unconfigured:
+            # 1. Remote Alert: PWA Push Notifications (Active production channel)
+            if push_ready:
+                from pywebpush import webpush, WebPushException
+                event_id = job.get("id", "")
+                reason_code = job.get("reason_code", "ZT-001")
+                cp_id = job.get("checkpoint", "CP-MAIN-01")
+                body_text = f"Unauthorized identity detected\nCheckpoint: {cp_id}\nAccess: DENIED"
+                if reason_code == "ZT-002":
+                    body_text = f"Biometric spoof detected\nCheckpoint: {cp_id}\nAccess: DENIED"
+                elif reason_code == "ZT-008":
+                    body_text = f"Custody timeout expired\nCheckpoint: {cp_id}\nAccess: DENIED"
+                elif reason_code == "ZT-009":
+                    body_text = f"Replay attack detected\nCheckpoint: {cp_id}\nAccess: DENIED"
+                elif reason_code == "ZT-013":
+                    body_text = f"Capture integrity violation\nCheckpoint: {cp_id}\nAccess: DENIED"
+
+                push_payload = json.dumps({
+                    "title": "🚨 VERITAS SECURITY BREACH",
+                    "body": body_text,
+                    "event_id": event_id,
+                    "reason_code": reason_code,
+                    "checkpoint": cp_id,
+                    "url": f"/audit?event={event_id}" if event_id else "/audit",
+                    "tag": event_id or "vault-security-breach",
+                    "active": True,
+                })
+                for sub_key, sub in subscriptions:
+                    if sub_key in delivered:
+                        continue
+                    try:
+                        webpush(subscription_info=sub["subscription"],
+                                data=push_payload,
+                                vapid_private_key=config["VAPID_PRIVATE_KEY"], vapid_claims={"sub": config["VAPID_SUBJECT"]}, timeout=10)
+                        delivered.add(sub_key)
+                    except WebPushException as exc:
+                        if exc.response is not None and exc.response.status_code in (404, 410):
+                            disable_subscription(store, sub_key, sub)
+                        else:
+                            errors.append("push")
+                    except Exception:
+                        errors.append("push")
+
+            # 2. Optional Legacy Telegram Alert (if configured in environment)
+            if tg_cfg["configured"] and "telegram" not in delivered:
+                photo_bytes = None
+                try:
+                    ev_path = job.get("evidence_path")
+                    ev_hash = job.get("evidence_hash")
+                    if not (ev_path and ev_hash):
+                        saved_ev, _ = store.get(f"event:{job.get('id', '')}")
+                        if saved_ev and saved_ev.get("evidence"):
+                            ev_path = saved_ev["evidence"].get("path")
+                            ev_hash = saved_ev["evidence"].get("sha256")
+                    if ev_path:
+                        cached_raw = get_cached_evidence_photo(ev_path)
+                        if cached_raw:
+                            try:
+                                import cv2
+                                frame_mat = cv2.imdecode(np.frombuffer(cached_raw, np.uint8), cv2.IMREAD_COLOR) if not isinstance(cached_raw, np.ndarray) else cached_raw
+                                if frame_mat is not None:
+                                    ok, buf = cv2.imencode(".jpg", frame_mat)
+                                    if ok:
+                                        photo_bytes = buf.tobytes()
+                            except Exception as c_err:
+                                logger.warning("Could not encode cached frame: %s", c_err)
+                        if not photo_bytes and ev_hash:
+                            try:
+                                enc_blob = store.read_blob(ev_path)
+                                photo_bytes = unseal(enc_blob, "evidence:" + ev_hash)
+                            except Exception as dec_err:
+                                logger.warning("Could not decrypt evidence frame for Telegram: %s", dec_err)
+
+                    ts = job.get("created_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    reason_txt = job.get("reason", "Unauthorized person detected at vault checkpoint")
+                    ev_id = job.get("id", "N/A")
+
+                    caption = (
+                        "🚨 VERITAS BREACH ALERT\n\n"
+                        "Checkpoint: CP-MAIN-01\n"
+                        "Access: DENIED\n"
+                        f"Reason: {reason_txt}\n"
+                        f"Time: {ts}\n"
+                        f"Evidence ID: {ev_id}"
+                    )
+                    send_telegram_photo_alert(caption, photo_bytes, config=tg_cfg)
+                    delivered.add("telegram")
+                    record_last_telegram_status(store, "SENT")
+                except Exception as exc:
+                    logger.warning("Telegram alert delivery failed: %s", exc)
+                    errors.append("telegram")
+                    record_last_telegram_status(store, "FAILED")
+                finally:
+                    del photo_bytes
+                    photo_bytes = None
+
+            # 3. Optional legacy fallback: WhatsApp notifications via callmebot
+            if whatsapp_ready and "whatsapp" not in delivered:
+                try:
+                    response = httpx.get(
+                        "https://api.callmebot.com/whatsapp.php",
+                        params={
+                            "phone": config["CALLMEBOT_PHONE"],
+                            "apikey": config["CALLMEBOT_API_KEY"],
+                            "text": f"VERITAS security breach. Event {job.get('id', '')}. Review the secure audit ledger.",
+                        },
+                        timeout=10,
+                    )
+                    response.raise_for_status()
+                    if "error" in response.text.lower():
+                        raise ValueError("Provider rejected the alert")
+                    delivered.add("whatsapp")
+                except Exception:
+                    errors.append("whatsapp")
 
     attempts = job.get("attempts", 0) + 1
     max_retries = 3
-    configured = tg_cfg["configured"] or push_ready or whatsapp_ready
+    configured = po_cfg["configured"] or tg_cfg["configured"] or push_ready or whatsapp_ready
 
     if is_non_breach:
         # Non-breach events (STANDBY, WAITING, GRANTED) do not dispatch alerts
@@ -584,6 +811,16 @@ def deliver(key, job, version):
     elif not configured:
         job_status = "UNCONFIGURED"
         done = False
+    elif po_cfg["configured"]:
+        if "pushover" in delivered:
+            job_status = "PUSHOVER_SENT"
+            done = True
+        elif attempts < max_retries:
+            job_status = "PUSHOVER_RETRYING"
+            done = False
+        else:
+            job_status = "PUSHOVER_FAILED"
+            done = True
     elif "telegram" in delivered and not push_ready:
         job_status = "TELEGRAM_SENT"
         done = True
@@ -620,9 +857,9 @@ def get_outbox_summary(store=None) -> dict:
     store = store or Store()
     jobs = [v for _, v, _ in store.records("job:")]
     queued = sum(1 for j in jobs if not j.get("done") and j.get("status") in ("QUEUED", "PENDING", "UNCONFIGURED"))
-    sent = sum(1 for j in jobs if j.get("status") in ("SENT", "TELEGRAM_SENT", "ACCEPTED_BY_PROVIDER"))
-    retrying = sum(1 for j in jobs if j.get("status") in ("RETRY", "RETRYING", "TELEGRAM_RETRYING"))
-    failed = sum(1 for j in jobs if j.get("status") in ("FAILED", "TELEGRAM_FAILED"))
+    sent = sum(1 for j in jobs if j.get("status") in ("SENT", "TELEGRAM_SENT", "PUSHOVER_SENT", "ACCEPTED_BY_PROVIDER"))
+    retrying = sum(1 for j in jobs if j.get("status") in ("RETRY", "RETRYING", "TELEGRAM_RETRYING", "PUSHOVER_RETRYING"))
+    failed = sum(1 for j in jobs if j.get("status") in ("FAILED", "TELEGRAM_FAILED", "PUSHOVER_FAILED"))
     device_confirmed = sum(1 for j in jobs if j.get("device_received") is True)
     return {
         "QUEUED": queued,

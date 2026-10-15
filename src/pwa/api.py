@@ -28,11 +28,16 @@ from src.pwa.alerts import (
     drain_outbox,
     ensure_vapid_keys,
     get_active_subscriptions,
+    get_last_pushover_status,
     get_last_telegram_status,
     get_outbox_summary,
+    get_pushover_config,
+    get_pushover_diagnostic_status,
     get_telegram_config,
     get_telegram_diagnostic_status,
+    send_pushover_alert,
     send_test_push,
+    send_test_pushover,
     send_test_telegram,
     settings,
     valid_push_endpoint,
@@ -327,6 +332,7 @@ def health():
         "cloud_configured": bool(os.environ.get("SUPABASE_URL")),
         "auth_configured": bool(os.environ.get("SUPABASE_URL") or os.environ.get("VAULT_OPERATOR_PASSWORD_HASH")),
         "encryption_configured": bool(os.environ.get("VAULT_ENCRYPTION_KEY")),
+        "pushover_configured": bool(os.environ.get("PUSHOVER_APP_TOKEN") and os.environ.get("PUSHOVER_USER_KEY")),
         "telegram_configured": bool(os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID")),
         "commit": get_git_commit(),
         "timestamp": utc(),
@@ -360,6 +366,7 @@ def readiness(response: Response):
             "enrolled_count": len(default_biometric_service._cache),
         },
         "notifications": {
+            "pushover_configured": bool(os.environ.get("PUSHOVER_APP_TOKEN") and os.environ.get("PUSHOVER_USER_KEY")),
             "vapid_configured": bool(cfg.get("VAPID_PUBLIC_KEY")),
             "active_subscriptions": len(active_subs),
         },
@@ -1150,16 +1157,34 @@ def control(user=Depends(admin)):
 def alerts_status(user=Depends(monitor_or_above)):
     store = Store()
     active_subs = get_active_subscriptions(store)
+    po_cfg = get_pushover_config()
     tg_cfg = get_telegram_config()
-    last_status = get_last_telegram_status(store)
+    last_po_status = get_last_pushover_status(store)
+    last_tg_status = get_last_telegram_status(store)
     outbox_summary = get_outbox_summary(store)
     return {
+        "pushover_configured": po_cfg["configured"],
+        "last_pushover_status": last_po_status,
         "telegram_configured": tg_cfg["configured"],
-        "last_telegram_status": last_status,
+        "last_telegram_status": last_tg_status,
         "push_configured": bool(ensure_vapid_keys(store).get("VAPID_PUBLIC_KEY")),
         "subscriptions_count": len(active_subs),
         "delivery_summary": outbox_summary,
     }
+
+
+@app.get("/api/alerts/pushover/status")
+def pushover_status(user=Depends(admin)):
+    """Backend Pushover diagnostic endpoint (admin only).
+    Returns safe configuration and reachability status without exposing secrets.
+    """
+    return get_pushover_diagnostic_status()
+
+
+@app.post("/api/alerts/pushover/test")
+def pushover_test(user=Depends(admin)):
+    """Authenticated admin test endpoint sending a verified Pushover test notification."""
+    return send_test_pushover()
 
 
 @app.get("/api/alerts/telegram/status")
