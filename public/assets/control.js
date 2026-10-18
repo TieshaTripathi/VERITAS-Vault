@@ -93,6 +93,56 @@ async function load() {
     if ($("#audio-status")) $("#audio-status").textContent = "READY";
     if ($("#audit-status")) $("#audit-status").textContent = result.audit_verified ? "VERIFIED" : "UNVERIFIED";
 
+    // Query Pushover diagnostic status
+    try {
+      const diag = await api("/alerts/pushover/status");
+      const isConfigured = Boolean(diag.configured);
+      const isConnected = isConfigured && diag.description === "CONNECTED" && diag.token_valid && diag.user_valid;
+
+      const badgeEl = $("#pushover-badge");
+      const configEl = $("#po-config-status");
+      const connEl = $("#po-connect-status");
+      const lastResultEl = $("#po-last-result");
+      const retryingEl = $("#po-retrying-count");
+      const failedEl = $("#po-failed-count");
+
+      if (configEl) {
+        configEl.textContent = isConfigured ? "CONFIGURED" : "NOT CONFIGURED";
+        configEl.style.color = isConfigured ? "#10b981" : "#ef4444";
+      }
+
+      if (connEl) {
+        connEl.textContent = isConnected
+          ? "CONNECTED"
+          : (isConfigured ? (diag.description || "INVALID") : "STANDBY");
+        connEl.style.color = isConnected
+          ? "#10b981"
+          : (isConfigured ? "#ef4444" : "#91a5bc");
+      }
+
+      if (badgeEl) {
+        badgeEl.textContent = isConnected
+          ? "ACTIVE"
+          : (isConfigured ? "ERROR" : "STANDBY");
+        badgeEl.className = isConnected
+          ? "badge GRANTED"
+          : (isConfigured ? "badge BREACH" : "badge WAITING");
+      }
+
+      if (lastResultEl) {
+        const st = diag.last_pushover_status || result.last_pushover_status || "NEVER";
+        lastResultEl.textContent = st;
+        lastResultEl.style.color = st === "SENT" ? "#10b981" : (st === "FAILED" ? "#ef4444" : "#91a5bc");
+      }
+
+      if (result.delivery_summary) {
+        if (retryingEl) retryingEl.textContent = String(result.delivery_summary.RETRYING || 0);
+        if (failedEl) failedEl.textContent = String(result.delivery_summary.FAILED || 0);
+      }
+    } catch (poErr) {
+      console.warn("Failed to retrieve Pushover diagnostic status:", poErr);
+    }
+
     // Query PWA Push status
     try {
       const sub = await getPushSubscription();
@@ -137,6 +187,31 @@ async function load() {
     toast(error.message);
   }
 }
+
+$("#btn-test-pushover")?.addEventListener("click", () =>
+  action($("#btn-test-pushover"), async () => {
+    if (!currentUser || currentUser.role !== "admin") throw new Error("Administrator sign-in required.");
+    try {
+      const res = await post("/alerts/pushover/test", {});
+      if (res.ok && res.sent) {
+        toast(`Test notification delivered via Pushover to ${res.recipient || "user"}!`);
+      } else {
+        toast(res.error || "Pushover test notification failed.");
+      }
+    } catch (err) {
+      toast(err.message || "Failed to send Pushover test.");
+    }
+    await load();
+  }),
+);
+
+$("#btn-validate-pushover")?.addEventListener("click", () =>
+  action($("#btn-validate-pushover"), async () => {
+    if (!currentUser || currentUser.role !== "admin") throw new Error("Administrator sign-in required.");
+    await load();
+    toast("Pushover connection validation refreshed.");
+  }),
+);
 
 $("#btn-enable-push")?.addEventListener("click", () =>
   action($("#btn-enable-push"), async () => {

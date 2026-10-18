@@ -1140,12 +1140,18 @@ def verify_audit_event(event_id: str, user=Depends(monitor_or_above)):
 def control(user=Depends(admin)):
     store = Store()
     active_subs = get_active_subscriptions(store)
+    po_cfg = get_pushover_config()
     tg_cfg = get_telegram_config()
+    last_po_status = get_last_pushover_status(store)
+    last_tg_status = get_last_telegram_status(store)
     outbox_summary = get_outbox_summary(store)
     return {
         "storage": "Supabase" if store.cloud else "SQLite local",
         "facenet": bool(os.environ.get("FACENET_MODEL_PATH")),
+        "pushover_configured": po_cfg["configured"],
+        "last_pushover_status": last_po_status,
         "telegram_configured": tg_cfg["configured"],
+        "last_telegram_status": last_tg_status,
         "subscriptions_count": len(active_subs),
         "audit_verified": True,
         "delivery_summary": outbox_summary,

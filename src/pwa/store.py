@@ -208,10 +208,18 @@ class Store:
     def event(self, event_id):
         if self.cloud:
             rows = self.cloud.rows("access_audit_logs", event_id=f"eq.{event_id}", select="pwa_data")
-            return rows[0]["pwa_data"] if rows else None
+            if rows:
+                return rows[0]["pwa_data"]
+            rec, _ = self.get(f"event:{event_id}")
+            return rec
         with self.db() as conn:
             row = conn.execute("SELECT payload FROM access_audit_logs WHERE id=?", (event_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+            if row:
+                return json.loads(row[0])
+            row2 = conn.execute("SELECT payload FROM records WHERE id=?", (f"event:{event_id}",)).fetchone()
+            if row2:
+                return json.loads(row2[0])
+        return None
 
     def save_blob(self, path, blob):
         if self.cloud:

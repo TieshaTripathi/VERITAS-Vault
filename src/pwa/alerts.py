@@ -666,7 +666,13 @@ def deliver(key, job, version):
     if is_critical_breach and not is_non_breach:
         if po_cfg["configured"]:
             # Primary channel: Pushover Messages API
-            if "pushover" not in delivered:
+            # Safe retry check: if the device already confirmed receipt (e.g. from a previous attempt
+            # where the provider accepted the alert but the client timed out waiting for the HTTP response,
+            # or the user already opened the alert link), do not send a duplicate notification.
+            if job.get("device_received"):
+                delivered.add("pushover")
+                record_last_pushover_status(store, "SENT")
+            elif "pushover" not in delivered:
                 try:
                     send_pushover_alert(
                         reason_code=job.get("reason_code", "ZT-001"),
@@ -678,6 +684,11 @@ def deliver(key, job, version):
                     )
                     delivered.add("pushover")
                     record_last_pushover_status(store, "SENT")
+                except httpx.TimeoutException as exc:
+                    logger.warning("Pushover alert request timed out for event %s (provider may have accepted alert): %s", job.get("id"), exc)
+                    errors.append("pushover")
+                    job["provider_timeout"] = True
+                    record_last_pushover_status(store, "FAILED")
                 except Exception as exc:
                     logger.warning("Pushover alert delivery failed: %s", exc)
                     errors.append("pushover")
@@ -812,7 +823,7 @@ def deliver(key, job, version):
         job_status = "UNCONFIGURED"
         done = False
     elif po_cfg["configured"]:
-        if "pushover" in delivered:
+        if "pushover" in delivered or job.get("device_received"):
             job_status = "PUSHOVER_SENT"
             done = True
         elif attempts < max_retries:

@@ -266,7 +266,12 @@ def test_pushover_duplicate_prevention_across_channels(tmp_path, monkeypatch):
 
     webpush_mock = MagicMock()
     monkeypatch.setattr("httpx.post", mock_post)
-    monkeypatch.setattr("pywebpush.webpush", webpush_mock)
+    try:
+        import pywebpush
+        monkeypatch.setattr("pywebpush.webpush", webpush_mock)
+    except ImportError:
+        import sys
+        sys.modules["pywebpush"] = MagicMock(webpush=webpush_mock)
 
     # First delivery pass
     deliver(job_key, job_data, 0)
@@ -476,3 +481,96 @@ def test_outbox_summary_aggregates_pushover_statuses(tmp_path, monkeypatch):
     assert summary["SENT"] >= 1
     assert summary["RETRYING"] >= 1
     assert summary["FAILED"] >= 1
+
+
+def test_pushover_timeout_retry_safety_with_device_receipt(tmp_path, monkeypatch):
+    """Verifies that if a Pushover send times out after the provider may have accepted the alert,
+    a device receipt confirmation prevents duplicate alerts on subsequent retry passes.
+    """
+    import httpx
+    monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
+    store = Store()
+    monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test_po_token")
+    monkeypatch.setenv("PUSHOVER_USER_KEY", "test_po_user")
+
+    job_id = "evt-timeout-safeguard-001"
+    job_key = f"job:{job_id}"
+    job_data = {
+        "id": job_id,
+        "status": "QUEUED",
+        "done": False,
+        "attempts": 0,
+        "reason_code": "ZT-001",
+        "reason": "Unregistered identity detected",
+        "checkpoint": "CP-MAIN-01",
+    }
+    store.put(job_key, job_data)
+
+    call_count = {"count": 0}
+
+    def mock_post_timeout(url, *args, **kwargs):
+        call_count["count"] += 1
+        raise httpx.ReadTimeout("Server timed out after request was sent to provider")
+
+    monkeypatch.setattr("httpx.post", mock_post_timeout)
+
+    # 1. First attempt times out waiting for Pushover response
+    deliver(job_key, job_data, 0)
+
+    assert call_count["count"] == 1
+    retrying_job, ver = store.get(job_key)
+    assert retrying_job["done"] is False
+    assert retrying_job["status"] == "PUSHOVER_RETRYING"
+    assert retrying_job["attempts"] == 1
+    assert retrying_job.get("provider_timeout") is True
+
+    # 2. Simulate device receipt: phone received the alert despite the read timeout
+    retrying_job["device_received"] = True
+    retrying_job["device_received_at"] = "2026-10-18T14:00:00Z"
+    retrying_job["next_at"] = 0  # Ready for retry
+    store.cas(job_key, ver, retrying_job)
+
+    # 3. Next retry run: MUST NOT make another HTTP request to Pushover
+    updated_job, ver2 = store.get(job_key)
+    deliver(job_key, updated_job, ver2)
+
+    # Pushover was NOT called a second time
+    assert call_count["count"] == 1
+
+    final_job, _ = store.get(job_key)
+    assert final_job["done"] is True
+    assert final_job["status"] == "PUSHOVER_SENT"
+    assert "pushover" in final_job["delivered"]
+    assert get_last_pushover_status(store) == "SENT"
+
+
+def test_pushover_control_room_status_and_audit_resolution(client, monkeypatch):
+    """Verifies that /api/control returns Pushover telemetry and /api/logs/{event_id} resolves string IDs."""
+    signin(client)
+    monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test_app_token_99")
+    monkeypatch.setenv("PUSHOVER_USER_KEY", "test_user_key_99")
+
+    # 1. /api/control includes pushover_configured and last_pushover_status
+    ctrl = client.get("/api/control").json()
+    assert ctrl["pushover_configured"] is True
+    assert "last_pushover_status" in ctrl
+    assert "delivery_summary" in ctrl
+
+    # 2. Create custom event with valid UUID event_id
+    store = Store()
+    evt_id = "11111111-2222-3333-4444-555555555555"
+    store.put(f"event:{evt_id}", {
+        "id": evt_id,
+        "timestamp": "2026-10-18T12:00:00Z",
+        "verdict": "BREACH",
+        "reason_code": "ZT-013",
+        "reason": "Capture integrity violation",
+        "parties": [],
+        "mode": "standard",
+    })
+
+    # Direct log retrieval by UUID event ID
+    log_res = client.get(f"/api/logs/{evt_id}")
+    assert log_res.status_code == 200
+    assert log_res.json()["reason_code"] == "ZT-013"
+
