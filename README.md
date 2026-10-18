@@ -286,6 +286,26 @@ CMD [".venv/bin/streamlit", "run", "dashboard/app.py", \
 
 ---
 
+## 🚨 Primary Breach Alerting: Pushover Integration
+
+VERITAS-Vault utilizes [Pushover](https://pushover.net/) as its primary real-time breach dispatch service for instant, high-priority notifications on mobile phones and desktop clients.
+
+### Zero-Trust Alert Guarantees:
+- **Zero Sensitive Data Leaks**: Alert payloads contain only the reason code (`ZT-001`, `ZT-002`, `ZT-008`, `ZT-009`, `ZT-013`), checkpoint ID, UTC timestamp, and a secure deep-link to the audit record. Raw biometric embeddings, unencrypted evidence frames, and cryptographic keys are strictly excluded.
+- **One Breach = One Logical Alert**: Each breach event maps to a single durable outbox job key (`job:<event_id>`) with lease locks.
+- **Duplicate Prevention**: When Pushover credentials are configured, legacy channels (Telegram, FCM, Web Push) are bypassed to eliminate redundant alerts.
+- **Safe Timeout & Retries**: Uses bounded exponential backoff. If an HTTP request times out after the provider may have accepted the alert, device delivery receipt confirmation (`/api/push/receipt`) prevents duplicate notifications on subsequent retries.
+- **Admin Control Room Panel**: Built-in `/control` interface for configuration status, live connection reachability validation (`/users/validate.json`), and test notification dispatch.
+
+### Configuration
+Set the following environment variables in your server hosting platform (e.g., Render / Cloud Run):
+```env
+PUSHOVER_APP_TOKEN=your_30_char_application_token
+PUSHOVER_USER_KEY=your_30_char_user_key
+```
+
+---
+
 ## 📱 Mobile PWA & Web Push Notification Requirements
 
 ### Android
