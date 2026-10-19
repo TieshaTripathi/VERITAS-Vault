@@ -209,7 +209,29 @@ CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel
   <div class="config-status">Local Siren<span id="audio-status">READY</span></div>
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
 </div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section></div>
-<div class="stack"><section class="panel" id="push-panel"><div class="panel-head"><h2 class="section-label">PWA REMOTE ALERTS</h2><span class="badge" id="control-push-badge">NOT SUBSCRIBED</span></div>
+<div class="stack"><section class="panel" id="pushover-panel"><div class="panel-head"><h2 class="section-label">PUSHOVER BREACH DISPATCH</h2><span class="badge" id="pushover-badge">CHECKING...</span></div>
+<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Primary breach notification service. Instant priority alerts delivered to your phone for confirmed zero-trust breaches (ZT-001, ZT-002, ZT-008, ZT-009, ZT-013).</p>
+<div class="config-grid" style="margin-bottom:12px;">
+  <div class="config-status">Configuration<strong id="po-config-status" style="font-size:13px;">STANDBY</strong></div>
+  <div class="config-status">Connection<span id="po-connect-status" style="font-size:13px;">CHECKING...</span></div>
+  <div class="config-status">Last Send Result<strong id="po-last-result" style="font-size:13px;">NEVER</strong></div>
+</div>
+<div class="delivery-tracking-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px;text-align:center;">
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">RETRYING ALERTS</div>
+    <strong id="po-retrying-count" style="font-size:13px;color:#38bdf8;">0</strong>
+  </div>
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">FAILED ALERTS</div>
+    <strong id="po-failed-count" style="font-size:13px;color:#ef4444;">0</strong>
+  </div>
+</div>
+<div class="form-actions" style="display:flex;gap:10px;flex-direction:column;">
+  <button type="button" id="btn-test-pushover" class="primary" style="width:100%;">TEST PUSHOVER NOTIFICATION 🚨</button>
+  <button type="button" id="btn-validate-pushover" class="quiet" style="width:100%;">VALIDATE CONNECTION ⟳</button>
+</div>
+<p class="callout" style="margin-top:14px;">Credentials are managed securely in Render environment variables (<code>PUSHOVER_APP_TOKEN</code>, <code>PUSHOVER_USER_KEY</code>). Secrets are never exposed to client storage or the browser.</p></section>
+<section class="panel" id="push-panel"><div class="panel-head"><h2 class="section-label">PWA REMOTE ALERTS</h2><span class="badge" id="control-push-badge">NOT SUBSCRIBED</span></div>
 <div class="config-grid" style="margin-bottom:12px;">
   <div class="config-status">Web Push<strong id="control-push-status" style="font-size:14px;">STANDBY</strong></div>
   <div class="config-status">Active Devices<span id="control-push-devices">0</span></div>

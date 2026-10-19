@@ -105,6 +105,7 @@ self.addEventListener("push", (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           event_id: event_id,
+          channel: "webpush",
           device_label: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent)
             ? "Mobile Monitor Phone"
             : "Installed PWA Device",

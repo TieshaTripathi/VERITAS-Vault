@@ -271,7 +271,7 @@ def test_pushover_duplicate_prevention_across_channels(tmp_path, monkeypatch):
         monkeypatch.setattr("pywebpush.webpush", webpush_mock)
     except ImportError:
         import sys
-        sys.modules["pywebpush"] = MagicMock(webpush=webpush_mock)
+        monkeypatch.setitem(sys.modules, "pywebpush", MagicMock(webpush=webpush_mock))
 
     # First delivery pass
     deliver(job_key, job_data, 0)
@@ -573,4 +573,121 @@ def test_pushover_control_room_status_and_audit_resolution(client, monkeypatch):
     log_res = client.get(f"/api/logs/{evt_id}")
     assert log_res.status_code == 200
     assert log_res.json()["reason_code"] == "ZT-013"
+
+
+def test_pwa_receipt_does_not_halt_pushover_retries(client, monkeypatch, tmp_path):
+    """Verifies that a generic PWA Web Push receipt does NOT falsely confirm Pushover delivery or halt Pushover retries."""
+    import httpx
+    monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
+    store = Store()
+    monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test_po_token")
+    monkeypatch.setenv("PUSHOVER_USER_KEY", "test_po_user")
+
+    job_id = "evt-pwa-receipt-isolation-001"
+    job_key = f"job:{job_id}"
+    job_data = {
+        "id": job_id,
+        "status": "QUEUED",
+        "done": False,
+        "attempts": 0,
+        "reason_code": "ZT-001",
+        "reason": "Unregistered identity detected",
+        "checkpoint": "CP-MAIN-01",
+    }
+    store.put(job_key, job_data)
+
+    call_count = {"count": 0}
+
+    def mock_post_timeout(url, *args, **kwargs):
+        call_count["count"] += 1
+        raise httpx.ReadTimeout("Server timed out after request was sent to provider")
+
+    monkeypatch.setattr("httpx.post", mock_post_timeout)
+
+    # 1. First attempt times out
+    deliver(job_key, job_data, 0)
+    assert call_count["count"] == 1
+
+    retrying_job, ver = store.get(job_key)
+    assert retrying_job["done"] is False
+    assert retrying_job["status"] == "PUSHOVER_RETRYING"
+
+    # 2. PWA Web Push receipt arrives (e.g. from service worker receiving Web Push)
+    res = client.post("/api/push/receipt", json={
+        "event_id": job_id,
+        "channel": "webpush",
+        "device_label": "Installed PWA Device",
+    })
+    assert res.status_code == 200
+
+    job_after_receipt, ver2 = store.get(job_key)
+    assert job_after_receipt["pwa_received"] is True
+    assert job_after_receipt.get("pushover_received") is not True
+
+    # 3. Simulate retry pass ready
+    job_after_receipt["next_at"] = 0
+    store.cas(job_key, ver2, job_after_receipt)
+
+    # Pushover send should be retried! (PWA receipt must NOT halt Pushover retry)
+    job_retry, ver3 = store.get(job_key)
+    deliver(job_key, job_retry, ver3)
+    assert call_count["count"] == 2  # Pushover was retried!
+
+
+def test_pushover_receipt_halts_pushover_retries(client, monkeypatch, tmp_path):
+    """Verifies that an explicit Pushover client receipt (channel='pushover') confirms delivery and halts retries."""
+    import httpx
+    monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
+    store = Store()
+    monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test_po_token")
+    monkeypatch.setenv("PUSHOVER_USER_KEY", "test_po_user")
+
+    job_id = "evt-po-receipt-ack-001"
+    job_key = f"job:{job_id}"
+    job_data = {
+        "id": job_id,
+        "status": "QUEUED",
+        "done": False,
+        "attempts": 0,
+        "reason_code": "ZT-001",
+        "reason": "Unregistered identity detected",
+        "checkpoint": "CP-MAIN-01",
+    }
+    store.put(job_key, job_data)
+
+    call_count = {"count": 0}
+
+    def mock_post_timeout(url, *args, **kwargs):
+        call_count["count"] += 1
+        raise httpx.ReadTimeout("Server timed out after request was sent to provider")
+
+    monkeypatch.setattr("httpx.post", mock_post_timeout)
+
+    # 1. First attempt times out
+    deliver(job_key, job_data, 0)
+    assert call_count["count"] == 1
+
+    # 2. Operator taps Pushover alert link, logs.js posts pushover receipt
+    res = client.post("/api/push/receipt", json={
+        "event_id": job_id,
+        "channel": "pushover",
+        "device_label": "Mobile Pushover Client",
+    })
+    assert res.status_code == 200
+
+    job_after_receipt, ver2 = store.get(job_key)
+    assert job_after_receipt["pushover_received"] is True
+    job_after_receipt["next_at"] = 0
+    store.cas(job_key, ver2, job_after_receipt)
+
+    # 3. Retry run: MUST halt Pushover retries because user confirmed receipt via Pushover
+    job_retry, ver3 = store.get(job_key)
+    deliver(job_key, job_retry, ver3)
+    assert call_count["count"] == 1  # No second call
+
+    final_job, _ = store.get(job_key)
+    assert final_job["done"] is True
+    assert final_job["status"] == "PUSHOVER_SENT"
+    assert "pushover" in final_job["delivered"]
+
 

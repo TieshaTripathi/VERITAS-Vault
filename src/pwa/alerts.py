@@ -666,10 +666,14 @@ def deliver(key, job, version):
     if is_critical_breach and not is_non_breach:
         if po_cfg["configured"]:
             # Primary channel: Pushover Messages API
-            # Safe retry check: if the device already confirmed receipt (e.g. from a previous attempt
-            # where the provider accepted the alert but the client timed out waiting for the HTTP response,
-            # or the user already opened the alert link), do not send a duplicate notification.
-            if job.get("device_received"):
+            # Safe retry check: only halt Pushover retries if Pushover itself was delivered,
+            # or if the device confirmed receipt specifically via Pushover (e.g. user opened the audit link from Pushover).
+            # Do NOT assume a generic PWA Web Push receipt confirms Pushover delivery.
+            pushover_confirmed_by_device = bool(
+                job.get("pushover_received")
+                or (job.get("device_received") and not job.get("pwa_received"))
+            )
+            if pushover_confirmed_by_device:
                 delivered.add("pushover")
                 record_last_pushover_status(store, "SENT")
             elif "pushover" not in delivered:
@@ -699,7 +703,11 @@ def deliver(key, job, version):
             # Fallback alert channels when Pushover is unconfigured:
             # 1. Remote Alert: PWA Push Notifications (Active production channel)
             if push_ready:
-                from pywebpush import webpush, WebPushException
+                try:
+                    from pywebpush import webpush, WebPushException
+                except ImportError:
+                    webpush = None
+                    errors.append("push")
                 event_id = job.get("id", "")
                 reason_code = job.get("reason_code", "ZT-001")
                 cp_id = job.get("checkpoint", "CP-MAIN-01")
@@ -823,7 +831,11 @@ def deliver(key, job, version):
         job_status = "UNCONFIGURED"
         done = False
     elif po_cfg["configured"]:
-        if "pushover" in delivered or job.get("device_received"):
+        pushover_confirmed_by_device = bool(
+            job.get("pushover_received")
+            or (job.get("device_received") and not job.get("pwa_received"))
+        )
+        if "pushover" in delivered or pushover_confirmed_by_device:
             job_status = "PUSHOVER_SENT"
             done = True
         elif attempts < max_retries:
@@ -888,7 +900,10 @@ def send_test_push(store=None):
     subscriptions = get_active_subscriptions(store)
     if not (config.get("VAPID_PRIVATE_KEY") and config.get("VAPID_PUBLIC_KEY")):
         return {"sent": 0, "error": "VAPID keys not configured"}
-    from pywebpush import webpush, WebPushException
+    try:
+        from pywebpush import webpush, WebPushException
+    except ImportError:
+        return {"sent": 0, "error": "Web Push library (pywebpush) not installed"}
     sent = 0
     now_tag = f"test-{int(time.time())}"
     payload = json.dumps({

@@ -47,6 +47,7 @@ async function load() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           event_id: targetEventId,
+          channel: "pushover",
           device_label: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent)
             ? "Mobile Pushover Client"
             : "Desktop Pushover Client",

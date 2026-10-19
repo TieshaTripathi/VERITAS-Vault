@@ -26,6 +26,7 @@ def p3_env(tmp_path, monkeypatch):
     for key in (
         "VERCEL", "SUPABASE_URL", "SUPABASE_KEY", "SUPABASE_SERVICE_ROLE_KEY",
         "FACENET_MODEL_PATH", "CALLMEBOT_API_KEY", "CALLMEBOT_PHONE",
+        "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
@@ -183,7 +184,18 @@ def test_notification_delivery_tracking_and_status_progression(p3_env, monkeypat
 
     # Mock webpush to simulate successful provider acceptance (201 Created)
     webpush_mock = MagicMock()
-    monkeypatch.setattr("pywebpush.webpush", webpush_mock)
+    try:
+        from pywebpush import WebPushException
+        import pywebpush
+        monkeypatch.setattr("pywebpush.webpush", webpush_mock)
+    except ImportError:
+        import sys
+        class WebPushException(Exception):
+            def __init__(self, message, response=None):
+                super().__init__(message)
+                self.response = response
+        pywebpush = MagicMock(webpush=webpush_mock, WebPushException=WebPushException)
+        monkeypatch.setitem(sys.modules, "pywebpush", pywebpush)
 
     deliver(job_key, job_data, 0)
 
@@ -206,7 +218,6 @@ def test_notification_delivery_tracking_and_status_progression(p3_env, monkeypat
     }
     store.put(job_fail_key, job_fail_data)
 
-    from pywebpush import WebPushException
     mock_err_resp = MagicMock()
     mock_err_resp.status_code = 503
     webpush_fail = MagicMock(side_effect=WebPushException("503 Gateway Timeout", response=mock_err_resp))

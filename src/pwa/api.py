@@ -1330,6 +1330,7 @@ def register_fcm_token(body: FCMTokenRegistration, user=Depends(monitor_or_above
 class PushReceipt(BaseModel):
     event_id: str = Field(max_length=128)
     device_label: str = Field(default="Mobile Monitor Phone", max_length=128)
+    channel: Optional[str] = Field(default=None, max_length=32)
 
 
 @app.post("/api/push/receipt")
@@ -1339,6 +1340,15 @@ def record_push_receipt(body: PushReceipt):
     key = f"job:{body.event_id}"
     job, ver = store.get(key)
     if job:
+        chan = (body.channel or "").lower()
+        label = (body.device_label or "").lower()
+        if chan == "pushover" or "pushover" in label:
+            job["pushover_received"] = True
+            job["pushover_received_at"] = utc()
+        elif chan in ("webpush", "pwa") or "installed pwa" in label or "web device" in label:
+            job["pwa_received"] = True
+            job["pwa_received_at"] = utc()
+
         job["device_received"] = True
         job["device_received_at"] = utc()
         job["device_label"] = body.device_label

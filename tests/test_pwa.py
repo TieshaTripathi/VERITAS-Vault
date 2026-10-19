@@ -881,7 +881,18 @@ def test_breach_triggers_push_dispatch_and_waiting_granted_do_not(client, monkey
 def test_dead_subscription_disables_it_and_delivery_failure_does_not_block_breach(client, monkeypatch):
     """Verifies that 410 Gone from Web Push marks subscription inactive without breaking access or breach flow."""
     from src.pwa import alerts
-    from pywebpush import WebPushException
+    try:
+        from pywebpush import WebPushException
+        import pywebpush
+    except ImportError:
+        import sys
+        from unittest.mock import MagicMock
+        class WebPushException(Exception):
+            def __init__(self, message, response=None):
+                super().__init__(message)
+                self.response = response
+        pywebpush = MagicMock(WebPushException=WebPushException)
+        monkeypatch.setitem(sys.modules, "pywebpush", pywebpush)
     signin(client)
     store = Store()
 
@@ -904,7 +915,6 @@ def test_dead_subscription_disables_it_and_delivery_failure_does_not_block_breac
         "VAPID_PUBLIC_KEY": "pub", "VAPID_PRIVATE_KEY": "priv", "VAPID_SUBJECT": "mailto:sec@example.com",
         "CALLMEBOT_PHONE": "", "CALLMEBOT_API_KEY": ""
     })
-    import pywebpush
     monkeypatch.setattr(pywebpush, "webpush", mock_webpush_fail)
 
     job = {"id": "test-dead-sub-job", "done": False, "attempts": 0, "reason": "Test breach", "reason_code": "ZT-001"}
