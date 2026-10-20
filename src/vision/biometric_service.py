@@ -136,19 +136,19 @@ class BiometricService:
                                 needs_reenrollment=needs_reenroll
                             )
                         elif "norm" in data:
-                            # Re-extract standard 512-D embedding from stored norm crop
-                            norm_crop = data["norm"]
-                            id_emb = self.embedding_extractor.extract_embedding(norm_crop)
+                            # Preserve legacy data but require a fresh enrollment; a stored
+                            # normalized crop is not a capture under the active model.
+                            id_emb = np.zeros(self.config.embedding_dim, dtype=np.float32)
                             self._cache[person_id] = EnrolledIdentity(
                                 id=person_id,
                                 name=person.get("name", "Unknown"),
                                 role=person.get("role", "Employee"),
                                 identity_embedding=id_emb,
                                 representative_embeddings=[],
-                                model_version=active_version,
+                                model_version=template_version,
                                 quality_score=0.85,
                                 enrolled_at=str(person.get("created_at", "")),
-                                needs_reenrollment=False
+                                needs_reenrollment=True
                             )
                         else:
                             logger.error(f"Template for identity '{person_id}' missing valid embedding or norm crop")
@@ -224,7 +224,7 @@ class BiometricService:
                 min_interval_ms=self.config.min_observation_interval_ms
             ):
                 t_emb0 = time.perf_counter()
-                probe_embedding = self.embedding_extractor.extract_embedding(face.crop, face.landmarks)
+                probe_embedding = self.embedding_extractor.extract_embedding(face.crop, face.crop_landmarks)
                 embedding_total_ms += (time.perf_counter() - t_emb0) * 1000.0
 
                 # 5. Matching against in-memory cache
@@ -238,6 +238,8 @@ class BiometricService:
 
             # Determine user-facing verdict from consensus state
             verdict = track.consensus_verdict  # "VERIFIED" | "POSSIBLE_MATCH" | "UNKNOWN_CONFIRMED" | "VERIFYING"
+            if not quality_eval.is_valid or track.consecutive_conflicts:
+                verdict = "VERIFYING"
             is_recognized = (verdict == "VERIFIED")
             
             # Identity details
@@ -269,13 +271,13 @@ class BiometricService:
                 "role": cand_role,
                 "similarity": round(float(similarity), 3),
                 "is_recognized": is_recognized,
-                "is_live": (track.pad_status != "LIVENESS FAILED"),
+                "is_live": face.is_live and track.pad_status == "LIVENESS PASS",
                 "confidence": round(float(similarity), 3),
                 "recognition_state": verdict,
                 "candidate_name": cand_name,
                 "candidate_similarity": round(float(similarity), 3),
                 "liveness": liveness_label,
-                "pad_status": "PASS" if face.is_live else "FAIL",
+                "pad_status": "PASS" if face.is_live else ("FAIL" if liveness_label == "FAIL" else "CHECKING"),
                 "pad_score": float(face.pad_score),
                 "pad_confidence": float(face.pad_confidence),
                 "pad_signals": face.pad_signals,

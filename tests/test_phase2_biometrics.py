@@ -131,6 +131,12 @@ def test_mobilefacenet_extractor_l2_unit_vector():
     extractor = MobileFaceNetEmbeddingExtractor()
     assert extractor.version == "mbf_onnx_v2"
     dummy_crop = np.ones((112, 112, 3), dtype=np.uint8) * 100
+    if extractor._net is None and extractor._session is None:
+        # Model weights are not committed. A clean checkout must fail closed,
+        # rather than testing handcrafted features under a neural model version.
+        with pytest.raises(RuntimeError, match="unavailable"):
+            extractor.extract_embedding(dummy_crop)
+        return
     emb = extractor.extract_embedding(dummy_crop)
     assert emb.shape == (512,)
     assert emb.dtype == np.float32

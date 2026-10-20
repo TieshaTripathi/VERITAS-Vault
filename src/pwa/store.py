@@ -155,7 +155,12 @@ class Store:
         match["status"] = "REVOKED"
         match["revoked_by"] = revoker
         match["revoked_at"] = time.time()
-        self.enroll(match)
+        if self.cloud:
+            self.cloud.request("PATCH", "/rest/v1/enrolled_users",
+                               params={"user_id": f"eq.{user_id}"},
+                               json={"status": "REVOKED", "pwa_data": match})
+        else:
+            self.enroll(match)
         try:
             from src.vision.biometric_service import default_biometric_service
             default_biometric_service.invalidate_cache()

@@ -1,9 +1,9 @@
 """Durable alert outbox with bounded concurrent delivery and retry leases.
-Pushover is the primary breach notification service, configured via Render environment variables.
-Telegram and Web Push alerts are retained as secondary/legacy fallback channels.
+Native Web Push is preferred; legacy channels remain available when no PWA is registered.
 """
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -17,10 +17,15 @@ from typing import Dict, Optional
 import httpx
 import numpy as np
 
-from src.pwa.security import unseal
+from src.pwa.security import encryption_key, unseal
 from src.pwa.store import Store
 
 logger = logging.getLogger("vault.alerts")
+
+
+def push_receipt_token(event_id: str) -> str:
+    """Event-scoped proof included only in the encrypted push payload."""
+    return hmac.new(encryption_key(), ("push-receipt:" + event_id).encode(), hashlib.sha256).hexdigest()
 
 _evidence_photo_cache: Dict[str, bytes] = {}
 _evidence_cache_lock = threading.Lock()
@@ -629,16 +634,15 @@ def send_telegram_photo_alert(caption: str, photo_bytes: bytes = None, filename:
 
 def deliver(key, job, version):
     """Asynchronously process an outbox alert job.
-    Pushover is the primary notification service for confirmed critical breaches.
-    When Pushover is configured, Telegram, FCM, and legacy Web Push are bypassed
-    to prevent duplicate alerts.
+    Native Web Push takes precedence over configured legacy notification services.
     Failures NEVER break access denial, evidence storage, audit log, or siren.
     Retries failed alerts with bounded exponential backoff.
     """
     store = Store()
     if job.get("done") or job.get("next_at", 0) > time.time() or job.get("lease_until", 0) > time.time():
         return
-    job = dict(job, lease_until=time.time() + 90)
+    claimed_lease = time.time() + 90
+    job = dict(job, lease_until=claimed_lease)
     if not store.cas(key, version, job):
         return
 
@@ -662,9 +666,10 @@ def deliver(key, job, version):
     whatsapp_ready = bool(config.get("CALLMEBOT_API_KEY") and config.get("CALLMEBOT_PHONE"))
     po_cfg = get_pushover_config()
     tg_cfg = get_telegram_config()
+    use_pushover = po_cfg["configured"] and not push_ready
 
     if is_critical_breach and not is_non_breach:
-        if po_cfg["configured"]:
+        if use_pushover:
             # Primary channel: Pushover Messages API
             # Safe retry check: only halt Pushover retries if Pushover itself was delivered,
             # or if the device confirmed receipt specifically via Pushover (e.g. user opened the audit link from Pushover).
@@ -730,6 +735,7 @@ def deliver(key, job, version):
                     "url": f"/audit?event={event_id}" if event_id else "/audit",
                     "tag": event_id or "vault-security-breach",
                     "active": True,
+                    "receipt_token": push_receipt_token(event_id),
                 })
                 for sub_key, sub in subscriptions:
                     if sub_key in delivered:
@@ -748,7 +754,7 @@ def deliver(key, job, version):
                         errors.append("push")
 
             # 2. Optional Legacy Telegram Alert (if configured in environment)
-            if tg_cfg["configured"] and "telegram" not in delivered:
+            if not push_ready and tg_cfg["configured"] and "telegram" not in delivered:
                 photo_bytes = None
                 try:
                     ev_path = job.get("evidence_path")
@@ -801,7 +807,7 @@ def deliver(key, job, version):
                     photo_bytes = None
 
             # 3. Optional legacy fallback: WhatsApp notifications via callmebot
-            if whatsapp_ready and "whatsapp" not in delivered:
+            if not push_ready and whatsapp_ready and "whatsapp" not in delivered:
                 try:
                     response = httpx.get(
                         "https://api.callmebot.com/whatsapp.php",
@@ -830,7 +836,7 @@ def deliver(key, job, version):
     elif not configured:
         job_status = "UNCONFIGURED"
         done = False
-    elif po_cfg["configured"]:
+    elif use_pushover:
         pushover_confirmed_by_device = bool(
             job.get("pushover_received")
             or (job.get("device_received") and not job.get("pwa_received"))
@@ -847,7 +853,7 @@ def deliver(key, job, version):
     elif "telegram" in delivered and not push_ready:
         job_status = "TELEGRAM_SENT"
         done = True
-    elif "telegram" in delivered or (not errors and (push_ready or whatsapp_ready)):
+    elif not errors and (push_ready or whatsapp_ready or "telegram" in delivered):
         job_status = "SENT"
         done = True
     elif "telegram" in errors and not push_ready:
@@ -872,7 +878,21 @@ def deliver(key, job, version):
         next_at=time.time() + (2 ** min(attempts, 6) * 5) if not done else 0,
         status=job_status,
     )
-    store.cas(key, version + 1, job)
+    if not store.cas(key, version + 1, job):
+        # A device receipt can arrive before the push request returns. Preserve
+        # that acknowledgement while committing delivery progress under our lease.
+        for _ in range(5):
+            current, current_version = store.get(key)
+            if not current or current.get("lease_until") != claimed_lease:
+                return
+            merged = dict(current, **job)
+            for field in ("device_received", "device_received_at", "device_label",
+                          "pwa_received", "pwa_received_at", "pushover_received", "pushover_received_at"):
+                if field in current:
+                    merged[field] = current[field]
+            if store.cas(key, current_version, merged):
+                return
+        logger.warning("Could not commit delivery progress after concurrent receipt")
 
 
 def get_outbox_summary(store=None) -> dict:

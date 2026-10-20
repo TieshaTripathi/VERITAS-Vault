@@ -314,7 +314,7 @@ def test_service_worker_headers_and_handlers(p3_env):
 
     sw_content = sw_res.text
     # Verifies cache version
-    assert "veritas-shell-v4.2.0" in sw_content
+    assert "veritas-shell-v4.2.1" in sw_content
     # Verifies push event handles event_id and posts receipt
     assert "self.addEventListener(\"push\"" in sw_content
     assert "/api/push/receipt" in sw_content

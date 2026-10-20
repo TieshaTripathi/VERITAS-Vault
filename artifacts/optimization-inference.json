@@ -1,0 +1,23 @@
+{
+  "scope": "Local Windows CPU, synthetic crops; not real-camera accuracy or Render measurements",
+  "opencv": "4.14.0",
+  "model_load_ms": 27.27,
+  "runtime_loaded": true,
+  "hashes": {
+    "face_detection_yunet_2023mar.onnx": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "face_recognition_sface_2021dec.onnx": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+    "mobilefacenet.onnx": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f"
+  },
+  "embedding": {
+    "median_ms": 17.04,
+    "p95_ms": 21.25,
+    "samples": 10,
+    "output_dimension": 512
+  },
+  "detector_blank_frame": {
+    "median_ms": 104.62,
+    "p95_ms": 119.85,
+    "samples": 10
+  },
+  "working_set_mb": 146.17
+}

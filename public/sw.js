@@ -1,4 +1,6 @@
-const CACHE = "veritas-shell-v4.2.0";
+const CACHE = "veritas-shell-v4.2.1";
+const API_BASE = ["veritas-vault14.web.app", "veritas-vault14.firebaseapp.com"].includes(self.location.hostname)
+  ? "https://veritas-vault-backend.onrender.com" : "";
 const SHELL = [
   "/checkpoint",
   "/enrollment",
@@ -99,13 +101,14 @@ self.addEventListener("push", (event) => {
   };
 
   // Device-side delivery confirmation back to backend
-  const receiptPromise = event_id
-    ? fetch("/api/push/receipt", {
+  const sendReceipt = () => event_id && payload.receipt_token
+    ? fetch(API_BASE + "/api/push/receipt", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Vault-Request": "1" },
         body: JSON.stringify({
           event_id: event_id,
           channel: "webpush",
+          receipt_token: payload.receipt_token,
           device_label: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent)
             ? "Mobile Monitor Phone"
             : "Installed PWA Device",
@@ -118,7 +121,7 @@ self.addEventListener("push", (event) => {
       ? self.registration.showNotification(title, options)
       : Promise.resolve();
 
-  event.waitUntil(Promise.all([receiptPromise, notifyPromise]));
+  event.waitUntil(notifyPromise.then(sendReceipt));
 });
 
 self.addEventListener("notificationclick", (event) => {

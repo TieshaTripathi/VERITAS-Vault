@@ -41,6 +41,7 @@ from src.pwa.alerts import (
     send_test_telegram,
     settings,
     valid_push_endpoint,
+    push_receipt_token,
 )
 from src.pwa.policy import advance, fresh, WINDOW_SECONDS
 from src.pwa.security import ROOT, check_password, encryption_key, seal, unseal
@@ -121,10 +122,6 @@ async def headers(request: Request, call_next):
         origin_allowed = (
             not origin
             or origin in allowed_set
-            or origin.endswith(".web.app")
-            or origin.endswith(".firebaseapp.com")
-            or "localhost" in origin
-            or "127.0.0.1" in origin
         )
         if not origin_allowed or request.headers.get("x-vault-request") != "1":
             return JSONResponse({"detail": "Invalid request origin"}, 403)
@@ -1312,11 +1309,14 @@ def unsubscribe(body: Subscription, user=Depends(monitor_or_above)):
     key = "push:" + hashlib.sha256(body.endpoint.encode()).hexdigest()
     store = Store()
     saved, version = store.get(key)
-    if saved and (saved.get("owner") == user["id"] or user.get("role") == "admin"):
-        store.cas(key, version, dict(saved, active=False, updated_at=utc()))
+    if not saved or (saved.get("owner") != user["id"] and user.get("role") != "admin"):
+        raise HTTPException(403, "Subscription owner or administrator required")
+    if not store.cas(key, version, dict(saved, active=False, updated_at=utc())):
+        raise HTTPException(409, "Subscription changed; retry")
     if store.cloud:
         try:
-            store.cloud.request("PATCH", f"/rest/v1/push_subscriptions?endpoint=eq.{body.endpoint}", json={"enabled": False})
+            store.cloud.request("PATCH", "/rest/v1/push_subscriptions",
+                                params={"endpoint": f"eq.{body.endpoint}"}, json={"enabled": False})
         except Exception as exc:
             import logging
             logging.getLogger("vault.api").warning("Failed to disable push subscription in Supabase: %s", exc)
@@ -1365,11 +1365,14 @@ class PushReceipt(BaseModel):
     event_id: str = Field(max_length=128)
     device_label: str = Field(default="Mobile Monitor Phone", max_length=128)
     channel: Optional[str] = Field(default=None, max_length=32)
+    receipt_token: Optional[str] = Field(default=None, max_length=128)
 
 
 @app.post("/api/push/receipt")
-def record_push_receipt(body: PushReceipt):
+def record_push_receipt(body: PushReceipt, request: Request):
     """Device-side confirmation that notification was actually displayed/received on phone."""
+    if not body.receipt_token or not hmac.compare_digest(body.receipt_token, push_receipt_token(body.event_id)):
+        authenticated_user(request)
     store = Store()
     key = f"job:{body.event_id}"
     job, ver = store.get(key)
