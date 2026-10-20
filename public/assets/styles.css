@@ -1784,31 +1784,6 @@ a.button:hover {
    3. Push Notifications
    ========================================================= */
 
-@media (max-width: 768px), (pointer: coarse) and (max-width: 900px) {
-  body.mobile-pwa .nav a[href="/enrollment"],
-  body.mobile-pwa .nav a[href="/control"],
-  body.monitor-mode .nav a[href="/enrollment"],
-  body.monitor-mode .nav a[href="/control"] {
-    display: none !important;
-  }
-
-  body.mobile-pwa #btn-checkpoint-reset,
-  body.monitor-mode #btn-checkpoint-reset,
-  body.mobile-pwa #diagnostics-panel,
-  body.monitor-mode #diagnostics-panel,
-  body.mobile-pwa .stack .panel,
-  body.monitor-mode .stack .panel,
-  body.mobile-pwa .danger-zone-panel,
-  body.monitor-mode .danger-zone-panel {
-    display: none !important;
-  }
-
-  body.mobile-pwa .mobile-notifications-card,
-  body.monitor-mode .mobile-notifications-card {
-    display: block !important;
-  }
-}
-
 body.monitor-mode .nav a[href="/enrollment"],
 body.monitor-mode .nav a[href="/control"] {
   display: none !important;
@@ -1827,6 +1802,23 @@ body.mobile-pwa #diagnostics-panel,
 body.monitor-mode .danger-zone-panel,
 body.mobile-pwa .danger-zone-panel {
   display: none !important;
+}
+
+@media (max-width: 768px), (pointer: coarse) and (max-width: 900px) {
+  body.mobile-pwa .nav a[href="/enrollment"],
+  body.mobile-pwa .nav a[href="/control"] {
+    display: none !important;
+  }
+
+  body.mobile-pwa .stack .panel,
+  body.monitor-mode .stack .panel {
+    display: none !important;
+  }
+
+  body.mobile-pwa .mobile-notifications-card,
+  body.monitor-mode .mobile-notifications-card {
+    display: block !important;
+  }
 }
 
 .mobile-notifications-card {
