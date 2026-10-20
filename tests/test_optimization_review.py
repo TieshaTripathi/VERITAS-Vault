@@ -131,3 +131,80 @@ def test_invalid_model_output_cannot_become_template(tmp_path, output):
     extractor._net.forward.return_value = output
     with pytest.raises(RuntimeError, match="invalid embedding"):
         extractor.extract_embedding(np.full((112, 112, 3), 100, np.uint8))
+
+
+def test_push_subscribe_fails_closed_when_cloud_persistence_fails(client, monkeypatch):
+    from src.storage.supabase_client import CloudUnavailable
+    store = MagicMock()
+    store.cloud = MagicMock()
+    store.cloud.request.side_effect = CloudUnavailable(
+        "Cloud request failed; access stays locked",
+        status_code=404,
+        error_code="PGRST204",
+        safe_diagnostic="Table 'push_subscriptions' does not exist in Supabase database. Apply migration 20261008_push_subscriptions.sql in Supabase SQL Editor.",
+    )
+    monkeypatch.setattr(backend, "Store", lambda: store)
+    backend.app.dependency_overrides[backend.monitor_or_above] = lambda: {"id": "admin-1", "role": "admin"}
+    try:
+        sub_payload = {
+            "endpoint": "https://fcm.googleapis.com/fcm/send/device-cloud-fail",
+            "keys": {"p256dh": "dummy-p256dh", "auth": "dummy-auth"},
+            "device_label": "Test Device",
+        }
+        res = client.post("/api/push/subscribe", json=sub_payload)
+        assert res.status_code == 503
+        assert "Table 'push_subscriptions' does not exist" in res.json()["detail"]
+        # Ensure store.put was NEVER called to record phantom subscription
+        store.put.assert_not_called()
+    finally:
+        backend.app.dependency_overrides.clear()
+
+
+def test_push_subscribe_permission_denied_diagnostic(client, monkeypatch):
+    from src.storage.supabase_client import CloudUnavailable
+    store = MagicMock()
+    store.cloud = MagicMock()
+    store.cloud.request.side_effect = CloudUnavailable(
+        "Cloud request failed; access stays locked",
+        status_code=403,
+        error_code="42501",
+        safe_diagnostic="Permission denied for 'push_subscriptions' in Supabase. Ensure SUPABASE_SERVICE_ROLE_KEY is set in Render environment and RLS permissions granted.",
+    )
+    monkeypatch.setattr(backend, "Store", lambda: store)
+    backend.app.dependency_overrides[backend.monitor_or_above] = lambda: {"id": "admin-1", "role": "admin"}
+    try:
+        sub_payload = {
+            "endpoint": "https://fcm.googleapis.com/fcm/send/device-perm-fail",
+            "keys": {"p256dh": "dummy-p256dh", "auth": "dummy-auth"},
+            "device_label": "Test Device",
+        }
+        res = client.post("/api/push/subscribe", json=sub_payload)
+        assert res.status_code == 503
+        assert "Permission denied for 'push_subscriptions'" in res.json()["detail"]
+        store.put.assert_not_called()
+    finally:
+        backend.app.dependency_overrides.clear()
+
+
+def test_supabase_cloud_diagnostic_parsing(monkeypatch):
+    import httpx
+    from src.storage.supabase_client import SupabaseCloud, CloudUnavailable
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_key")
+
+    req = httpx.Request("POST", "https://example.supabase.co/rest/v1/push_subscriptions")
+    mock_resp_404 = httpx.Response(
+        404,
+        json={"code": "PGRST204", "message": "relation \"public.push_subscriptions\" does not exist"},
+        request=req
+    )
+    monkeypatch.setattr(httpx, "request", lambda *args, **kwargs: mock_resp_404)
+
+    cloud = SupabaseCloud()
+    with pytest.raises(CloudUnavailable) as exc_info:
+        cloud.request("POST", "/rest/v1/push_subscriptions", json={})
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.error_code == "PGRST204"
+    assert "Apply migration 20261008_push_subscriptions.sql" in exc_info.value.safe_diagnostic
+    assert "dummy_key" not in exc_info.value.safe_diagnostic
+

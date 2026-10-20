@@ -6,7 +6,11 @@ import httpx
 
 
 class CloudUnavailable(RuntimeError):
-    pass
+    def __init__(self, message="Cloud unavailable; access stays locked", status_code=None, error_code=None, safe_diagnostic=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.safe_diagnostic = safe_diagnostic
 
 
 class SupabaseCloud:
@@ -39,7 +43,43 @@ class SupabaseCloud:
                 if attempt < max_attempts - 1:
                     time.sleep(0.25)
                     continue
-                raise CloudUnavailable("Cloud connection failed; access stays locked") from exc
+                raise CloudUnavailable(
+                    "Cloud connection failed; access stays locked",
+                    safe_diagnostic="Cloud connection failed or timed out",
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                error_code = None
+                safe_diag = None
+                try:
+                    data = exc.response.json()
+                    error_code = str(data.get("code") or "")
+                    msg = str(data.get("message") or "")
+                except Exception:
+                    data = {}
+                    error_code = ""
+                    msg = ""
+
+                # Distinguish exact failure modes safely without leaking tokens or keys:
+                if status_code == 404 or error_code in ("PGRST204", "42P01") or "does not exist" in msg.lower():
+                    safe_diag = "Table 'push_subscriptions' does not exist in Supabase database. Apply migration 20261008_push_subscriptions.sql in Supabase SQL Editor."
+                elif status_code in (401, 403) or error_code == "42501" or "permission denied" in msg.lower():
+                    safe_diag = "Permission denied for 'push_subscriptions' in Supabase. Ensure SUPABASE_SERVICE_ROLE_KEY is set in Render environment and RLS permissions granted."
+                elif status_code == 400:
+                    safe_diag = f"Supabase schema error (HTTP 400, code {error_code or 'BAD_REQUEST'}). Check table columns."
+                elif status_code == 409:
+                    safe_diag = "Supabase conflict on push subscription."
+                elif status_code >= 500:
+                    safe_diag = f"Supabase upstream service error (HTTP {status_code})."
+                else:
+                    safe_diag = f"Supabase request failed with HTTP {status_code}."
+
+                raise CloudUnavailable(
+                    "Cloud request failed; access stays locked",
+                    status_code=status_code,
+                    error_code=error_code,
+                    safe_diagnostic=safe_diag,
+                ) from exc
             except httpx.HTTPError as exc:
                 # Never include a URL, token or provider response in a public error.
                 raise CloudUnavailable("Cloud request failed; access stays locked") from exc

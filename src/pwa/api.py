@@ -1287,7 +1287,6 @@ def subscribe(body: Subscription, user=Depends(monitor_or_above)):
         "created_at": utc(),
         "updated_at": utc(),
     }
-    store.put(key, sub_data)
     if store.cloud:
         try:
             store.cloud.request("POST", "/rest/v1/push_subscriptions", json={
@@ -1300,7 +1299,10 @@ def subscribe(body: Subscription, user=Depends(monitor_or_above)):
             }, params={"on_conflict": "endpoint"}, headers={"Prefer": "resolution=merge-duplicates"})
         except Exception as exc:
             import logging
-            logging.getLogger("vault.api").warning("Failed to record push subscription in Supabase: %s", exc)
+            diag = getattr(exc, "safe_diagnostic", None) or "Cloud persistence failed"
+            logging.getLogger("vault.api").warning("Failed to record push subscription in Supabase: %s [%s]", exc, diag)
+            raise HTTPException(503, f"Cloud persistence unavailable: {diag}")
+    store.put(key, sub_data)
     return {"subscribed": True}
 
 
@@ -1319,7 +1321,8 @@ def unsubscribe(body: Subscription, user=Depends(monitor_or_above)):
                                 params={"endpoint": f"eq.{body.endpoint}"}, json={"enabled": False})
         except Exception as exc:
             import logging
-            logging.getLogger("vault.api").warning("Failed to disable push subscription in Supabase: %s", exc)
+            diag = getattr(exc, "safe_diagnostic", None) or "Cloud persistence failed"
+            logging.getLogger("vault.api").warning("Failed to disable push subscription in Supabase: %s [%s]", exc, diag)
     return {"subscribed": False}
 
 

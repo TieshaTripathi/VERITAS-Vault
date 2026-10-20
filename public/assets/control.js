@@ -155,20 +155,31 @@ async function load() {
       const perm = typeof Notification !== "undefined" ? Notification.permission : "unsupported";
       if (permEl) permEl.textContent = perm.toUpperCase();
 
-      const isSubscribed = Boolean(sub);
+      const serverCount = Number(result.subscriptions_count || 0);
+      const hasBrowserSub = Boolean(sub);
+      const isDurableActive = hasBrowserSub && serverCount > 0;
+
       if (statusEl) {
-        statusEl.textContent = isSubscribed ? "SUBSCRIBED" : "STANDBY";
-        statusEl.style.color = isSubscribed ? "var(--green)" : "#91a5bc";
+        statusEl.textContent = isDurableActive
+          ? "SUBSCRIBED"
+          : (hasBrowserSub ? "NOT SAVED TO CLOUD" : "STANDBY");
+        statusEl.style.color = isDurableActive
+          ? "var(--green)"
+          : (hasBrowserSub ? "var(--amber, #f59e0b)" : "#91a5bc");
       }
       if (badgeEl) {
-        badgeEl.textContent = isSubscribed ? "ACTIVE" : "STANDBY";
-        badgeEl.className = isSubscribed ? "badge" : "badge muted";
+        badgeEl.textContent = isDurableActive
+          ? "ACTIVE"
+          : (hasBrowserSub ? "UNSAVED" : "STANDBY");
+        badgeEl.className = isDurableActive
+          ? "badge GRANTED"
+          : (hasBrowserSub ? "badge WAITING" : "badge muted");
       }
       if (devicesEl) {
-        devicesEl.textContent = String(result.subscriptions_count || (isSubscribed ? 1 : 0));
+        devicesEl.textContent = String(serverCount);
       }
       if (enableBtn) {
-        enableBtn.textContent = isSubscribed
+        enableBtn.textContent = isDurableActive
           ? "SECURITY NOTIFICATIONS ACTIVE ✓"
           : "ENABLE SECURITY NOTIFICATIONS";
       }
@@ -218,8 +229,25 @@ $("#btn-enable-push")?.addEventListener("click", () =>
     if (!currentUser) throw new Error("Sign in to enable push notifications.");
     const existing = await getPushSubscription();
     if (existing) {
-      toast("PWA Push notifications already active on this device.");
-      return;
+      const { post } = await import("./common.js");
+      const isMobile = /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent);
+      const subJson = existing.toJSON();
+      try {
+        await post("/push/subscribe", {
+          endpoint: existing.endpoint,
+          keys: {
+            p256dh: subJson.keys?.p256dh || "",
+            auth: subJson.keys?.auth || "",
+          },
+          device_label: isMobile ? "Mobile PWA Device" : "Desktop Operations Console",
+        });
+        toast("Security notifications refreshed and active!");
+        await load();
+        return;
+      } catch (syncErr) {
+        await existing.unsubscribe().catch(() => {});
+        throw syncErr;
+      }
     }
     await enablePushNotifications();
     toast("Security notifications enabled for this PWA!");
