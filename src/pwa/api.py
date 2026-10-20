@@ -51,6 +51,7 @@ from src.policy.capture_session import default_capture_manager
 from src.policy.pdp import default_pdp
 from src.policy.door_controller import default_door_controller
 from src.blockchain.audit_chain import default_audit_ledger
+from src.vision.biometric_service import default_biometric_service
 
 logger = logging.getLogger("vault.api")
 
@@ -345,7 +346,6 @@ def readiness(response: Response):
     """Dependency readiness check evaluating database connectivity and model assets."""
     store = Store()
     db_check = store.check_connectivity(timeout=3.0)
-    from src.vision.biometric_service import default_biometric_service
     biometrics_ready = hasattr(default_biometric_service, "detector") and default_biometric_service.detector is not None
     active_version = getattr(default_biometric_service.embedding_extractor, "version", "unknown")
     cfg = ensure_vapid_keys(store)
@@ -431,8 +431,6 @@ def process_enrollment_payload(
       - Uses default_biometric_service.create_multisample_template (5-sample aggregation)
       - Returns (sealed_template_base64, primary_face_crop, quality_report)
     """
-    from src.vision.biometric_service import default_biometric_service
-
     sample_crops: List[np.ndarray] = []
     landmarks_list: List[Optional[Dict]] = []
     reports: List[Dict[str, Any]] = []
@@ -473,7 +471,6 @@ def process_enrollment_payload(
 def enroll(body: Enrollment, user=Depends(admin)):
     rate_limit("enroll:" + user["id"], 20)
     try:
-        from src.vision.biometric_service import default_biometric_service
         store = Store()
         person_id = body.personnel_id.upper()
         if any(p["id"] == person_id for p in store.personnel()):
@@ -596,7 +593,6 @@ def approve_enrollment_request(request_id: str, user=Depends(admin)):
         "baseline": req["baseline"]
     }
     store.enroll(person)
-    from src.vision.biometric_service import default_biometric_service
     default_biometric_service.invalidate_cache()
     return {"status": "APPROVED", "user_id": req["user_id"], "approved_by": user["id"], "activated": True}
 
@@ -624,14 +620,12 @@ def revoke_identity_endpoint(user_id: str, user=Depends(admin)):
     ok = store.revoke_user(user_id.upper(), revoker=user["id"])
     if not ok:
         raise HTTPException(404, f"Identity {user_id} not found in enrolled personnel")
-    from src.vision.biometric_service import default_biometric_service
     default_biometric_service.invalidate_cache()
     return {"status": "REVOKED", "user_id": user_id.upper(), "revoked_by": user["id"]}
 
 
 @app.get("/api/personnel")
 def personnel(user=Depends(admin)):
-    from src.vision.biometric_service import default_biometric_service
     people = Store().personnel()
     default_biometric_service.load_cache_if_needed(people)
     cache = default_biometric_service._cache
@@ -656,7 +650,6 @@ def reset_all_personnel(user=Depends(admin)):
     deleted = store.clear_personnel()
     from src.pwa.vision import detector
     detector.cache_clear()
-    from src.vision.biometric_service import default_biometric_service
     default_biometric_service.invalidate_cache()
     return {"deleted": deleted}
 
@@ -684,7 +677,6 @@ def reset_demo_environment(user=Depends(admin)):
     default_capture_manager.clear_all()
     from src.pwa.vision import detector
     detector.cache_clear()
-    from src.vision.biometric_service import default_biometric_service
     default_biometric_service.invalidate_cache()
     res = store.clear_demo_environment()
     return {
@@ -775,7 +767,50 @@ def transition(faces=None, evidence=None, key="checkpoint:main", raw=None, frame
     raise HTTPException(409, "Another operator updated the checkpoint; retry")
 
 
+_active_window_deadline: Optional[float] = None
+_window_lock = threading.Lock()
+
+
+def cancel_finish_window():
+    global _active_window_deadline
+    with _window_lock:
+        _active_window_deadline = None
+
+
+def schedule_finish_window(deadline: Optional[float]):
+    """Schedules at most ONE background timer thread per active custody window."""
+    global _active_window_deadline
+    if deadline is None:
+        return
+    with _window_lock:
+        if _active_window_deadline == deadline:
+            return
+        _active_window_deadline = deadline
+
+    def _worker(dl: float):
+        global _active_window_deadline
+        try:
+            delay = max(0.0, min(WINDOW_SECONDS, dl - time.time()))
+            if delay > 0:
+                time.sleep(delay)
+            with _window_lock:
+                if _active_window_deadline != dl:
+                    return
+            store = Store()
+            st, _ = store.get("checkpoint:main")
+            if st and st.get("state") == "WAITING" and st.get("deadline") == dl:
+                transition()
+                drain_outbox()
+        finally:
+            with _window_lock:
+                if _active_window_deadline == dl:
+                    _active_window_deadline = None
+
+    threading.Thread(target=_worker, args=(deadline,), daemon=True).start()
+
+
 def finish_window(deadline):
+    """Direct execution or fallback trigger for custody window expiry."""
     delay = max(0.0, min(WINDOW_SECONDS, deadline - time.time()))
     if delay > 0:
         time.sleep(delay)
@@ -857,7 +892,6 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
         return res
 
     try:
-        from src.vision.biometric_service import default_biometric_service
         people = store.personnel() if not default_biometric_service._cache_loaded else []
         frame, raw = decode(body.image)
         faces, quality_report = recognize(frame, people)
@@ -983,7 +1017,7 @@ def scan(body: FrameCapturePayload, background: BackgroundTasks, user=Depends(op
         result["next_frame_seq"] = (body.frame_seq + 1) if body.frame_seq is not None else 0
 
     if result["state"] == "WAITING":
-        threading.Thread(target=finish_window, args=(result["deadline"],), daemon=True).start()
+        schedule_finish_window(result.get("deadline"))
     elif terminal:
         background.add_task(drain_outbox)
     return result
@@ -1040,10 +1074,10 @@ class Mode(BaseModel):
 
 @app.post("/api/checkpoint/reset")
 def reset(body: Mode, user=Depends(operator)):
+    cancel_finish_window()
     store = Store()
     state, version = store.get("checkpoint:main")
     store.put("incident:active", None)
-    from src.vision.biometric_service import default_biometric_service
     default_biometric_service.tracker.clear()
     event = {"id": str(uuid.uuid4()), "timestamp": utc(), "verdict": "RESET", "mode": body.mode,
              "parties": [], "reason": "Operator reset: " + user["id"], "evidence": {}, "status": "RECORDED"}
