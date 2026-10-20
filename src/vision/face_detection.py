@@ -33,6 +33,14 @@ class DetectedFace:
     raw_yunet_row: Optional[np.ndarray] = None
     source_frame_shape: Optional[Tuple[int, int]] = None
 
+    @property
+    def crop_landmarks(self):
+        """Convert detector image coordinates to the cropped image coordinates."""
+        if not self.landmarks:
+            return None
+        x, y = self.bbox[:2]
+        return {name: (px - x, py - y) for name, (px, py) in self.landmarks.items()}
+
 
 class BaseFaceDetector(ABC):
     """Abstract interface for replaceable face detection models."""
@@ -98,15 +106,16 @@ class OpenCVFaceDetector(BaseFaceDetector):
                 # Sort left to right
                 sorted_eyes = sorted(eyes, key=lambda e: e[0])
                 e1, e2 = sorted_eyes[0], sorted_eyes[1]
-                landmarks["left_eye"] = (float(x1 + e1[0] + e1[2] / 2.0), float(y1 + e1[1] + e1[3] / 2.0))
-                landmarks["right_eye"] = (float(x1 + e2[0] + e2[2] / 2.0), float(y1 + e2[1] + e2[3] / 2.0))
+                landmarks["right_eye"] = (float(x1 + e1[0] + e1[2] / 2.0), float(y1 + e1[1] + e1[3] / 2.0))
+                landmarks["left_eye"] = (float(x1 + e2[0] + e2[2] / 2.0), float(y1 + e2[1] + e2[3] / 2.0))
 
             detected.append(DetectedFace(
                 bbox=(int(x1), int(y1), int(w), int(h)),
                 crop=crop,
                 confidence=0.95,
                 landmarks=landmarks if landmarks else None,
-                variance=var
+                variance=var,
+                source_frame_shape=frame.shape[:2]
             ))
 
         return detected

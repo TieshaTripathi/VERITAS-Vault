@@ -222,6 +222,9 @@ def test_item_12_telegram_failure_does_not_block_checkpoint(monkeypatch, tmp_pat
     monkeypatch.setenv("VAULT_ENCRYPTION_KEY", base64.b64encode(b"C" * 32).decode())
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bad-fake-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "123456789")
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("Simulated notification transport failure")
+    monkeypatch.setattr("src.pwa.alerts.send_telegram_photo_alert", unavailable)
 
     store = Store()
     job = {

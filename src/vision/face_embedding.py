@@ -8,6 +8,7 @@ Performs outlier filtering and multi-sample template aggregation.
 from abc import ABC, abstractmethod
 from functools import lru_cache
 import os
+import threading
 from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
@@ -128,6 +129,7 @@ class MobileFaceNetEmbeddingExtractor(BaseEmbeddingExtractor):
         self.version = "mbf_onnx_v2"
         self._net = None
         self._session = None
+        self._inference_lock = threading.Lock()
 
         if os.path.isfile(self.model_path):
             self._init_model()
@@ -155,7 +157,7 @@ class MobileFaceNetEmbeddingExtractor(BaseEmbeddingExtractor):
             if os.path.isfile(self.model_path):
                 self._init_model()
             if self._net is None and self._session is None:
-                return StandardFeatureEmbeddingExtractor().extract_embedding(face_crop, landmarks)
+                raise RuntimeError("MobileFaceNet model unavailable; biometric verification is locked")
 
         # 1. 5-point alignment or canonical eye alignment to 112x112
         aligned, ok, _ = align_face(face_crop, target_size=(112, 112), landmarks=landmarks)
@@ -169,8 +171,9 @@ class MobileFaceNetEmbeddingExtractor(BaseEmbeddingExtractor):
                 mean=(127.5, 127.5, 127.5),
                 swapRB=True
             )
-            self._net.setInput(blob)
-            raw_vec = self._net.forward().flatten()
+            with self._inference_lock:
+                self._net.setInput(blob)
+                raw_vec = self._net.forward().flatten()
         elif self._session is not None:
             rgb = cv2.cvtColor(aligned, cv2.COLOR_BGR2RGB).astype(np.float32)
             normalized = (rgb - 127.5) / 127.5
@@ -180,7 +183,9 @@ class MobileFaceNetEmbeddingExtractor(BaseEmbeddingExtractor):
         else:
             return np.zeros(512, dtype=np.float32)
 
-        norm = max(float(np.linalg.norm(raw_vec)), 1e-8)
+        if raw_vec.size != 512 or not np.isfinite(raw_vec).all() or np.linalg.norm(raw_vec) < 1e-8:
+            raise RuntimeError("MobileFaceNet returned an invalid embedding; verification is locked")
+        norm = float(np.linalg.norm(raw_vec))
         return (raw_vec / norm).astype(np.float32)
 
 

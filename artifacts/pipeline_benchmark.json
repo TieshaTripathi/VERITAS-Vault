@@ -1,53 +1,53 @@
 {
-  "timestamp": 1790968463.136855,
+  "timestamp": 1792512626.0020719,
   "iterations": 30,
   "stages": {
     "capture_decode_ms": {
-      "median": 1.52,
-      "p95": 2.52,
-      "p99": 2.76,
-      "min": 1.01,
-      "max": 2.81,
+      "median": 0.88,
+      "p95": 2.91,
+      "p99": 3.3,
+      "min": 0.47,
+      "max": 3.32,
       "sample_count": 30
     },
     "face_quality_ms": {
-      "median": 56.6,
-      "p95": 59.47,
-      "p99": 60.66,
-      "min": 52.05,
-      "max": 61.01,
+      "median": 35.43,
+      "p95": 42.42,
+      "p99": 45.35,
+      "min": 33.03,
+      "max": 45.61,
       "sample_count": 30
     },
     "pad_evaluation_ms": {
-      "median": 12.35,
-      "p95": 13.65,
-      "p99": 13.7,
-      "min": 10.96,
-      "max": 13.71,
+      "median": 3.46,
+      "p95": 6.09,
+      "p99": 7.39,
+      "min": 3.15,
+      "max": 7.77,
       "sample_count": 30
     },
     "biometric_embedding_ms": {
-      "median": 1.23,
-      "p95": 2.24,
-      "p99": 2.34,
-      "min": 0.96,
-      "max": 2.34,
+      "median": 0.76,
+      "p95": 1.53,
+      "p99": 2.29,
+      "min": 0.57,
+      "max": 2.45,
       "sample_count": 30
     },
     "biometric_comparison_ms": {
-      "median": 1.7,
-      "p95": 2.34,
-      "p99": 2.45,
-      "min": 1.45,
-      "max": 2.49,
+      "median": 0.9,
+      "p95": 1.96,
+      "p99": 2.67,
+      "min": 0.78,
+      "max": 2.79,
       "sample_count": 30
     },
     "pdp_evaluation_ms": {
-      "median": 0.04,
-      "p95": 0.05,
-      "p99": 0.06,
-      "min": 0.03,
-      "max": 0.06,
+      "median": 0.01,
+      "p95": 0.02,
+      "p99": 0.03,
+      "min": 0.01,
+      "max": 0.03,
       "sample_count": 30
     },
     "pep_verification_ms": {
@@ -59,19 +59,19 @@
       "sample_count": 30
     },
     "audit_append_ms": {
-      "median": 23.58,
-      "p95": 28.4,
-      "p99": 32.16,
-      "min": 18.02,
-      "max": 32.94,
+      "median": 16.33,
+      "p95": 22.86,
+      "p99": 24.91,
+      "min": 13.32,
+      "max": 25.5,
       "sample_count": 30
     },
     "end_to_end_ms": {
-      "median": 97.57,
-      "p95": 102.78,
-      "p99": 103.9,
-      "min": 91.27,
-      "max": 104.29,
+      "median": 59.48,
+      "p95": 68.55,
+      "p99": 71.81,
+      "min": 53.67,
+      "max": 72.38,
       "sample_count": 30
     }
   },

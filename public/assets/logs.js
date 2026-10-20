@@ -41,19 +41,6 @@ async function load() {
     // Auto-inspect event if specified in query parameter (?event=<event_id>)
     const targetEventId = new URLSearchParams(window.location.search).get("event");
     if (targetEventId) {
-      // Device-side delivery confirmation back to outbox so retries are safely halted
-      fetch("/api/push/receipt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          event_id: targetEventId,
-          channel: "pushover",
-          device_label: /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent)
-            ? "Mobile Pushover Client"
-            : "Desktop Pushover Client",
-        }),
-      }).catch(() => {});
-
       const match = events.find((e) => e.id === targetEventId);
       if (match) {
         inspect(match);

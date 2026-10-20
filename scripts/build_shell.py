@@ -209,8 +209,8 @@ CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel
   <div class="config-status">Local Siren<span id="audio-status">READY</span></div>
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
 </div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section></div>
-<div class="stack"><section class="panel" id="pushover-panel"><div class="panel-head"><h2 class="section-label">PUSHOVER BREACH DISPATCH</h2><span class="badge" id="pushover-badge">CHECKING...</span></div>
-<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Primary breach notification service. Instant priority alerts delivered to your phone for confirmed zero-trust breaches (ZT-001, ZT-002, ZT-008, ZT-009, ZT-013).</p>
+<div class="stack"><section class="panel" id="pushover-panel"><div class="panel-head"><h2 class="section-label">PUSHOVER / LEGACY FALLBACK</h2><span class="badge" id="pushover-badge">CHECKING...</span></div>
+<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Optional legacy channel used when no native PWA Web Push device is registered. Enable security notifications in the PWA panel below for native alerts.</p>
 <div class="config-grid" style="margin-bottom:12px;">
   <div class="config-status">Configuration<strong id="po-config-status" style="font-size:13px;">STANDBY</strong></div>
   <div class="config-status">Connection<span id="po-connect-status" style="font-size:13px;">CHECKING...</span></div>

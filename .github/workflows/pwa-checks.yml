@@ -21,6 +21,7 @@ jobs:
         run: python scripts/build_shell.py
       - name: Run full test suite
         run: |
+          set -o pipefail
           python -m pytest --basetemp=.pytest_tmp -v --tb=short -p no:cacheprovider 2>&1 | tee test_report.txt
       - name: Publish Test Summary
         if: always()
@@ -34,5 +35,7 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           for file in public/assets/*.js public/sw.js; do node --check "$file"; done
-      - run: git diff --exit-code -- public/checkpoint public/enrollment public/logs public/control
+      - name: Run notification regressions
+        run: node --test tests/*.mjs
+      - run: git diff --exit-code -- public/checkpoint public/enrollment public/audit public/control
 

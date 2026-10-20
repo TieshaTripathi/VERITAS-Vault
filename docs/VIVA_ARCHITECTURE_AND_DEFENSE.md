@@ -1,5 +1,7 @@
 # VERITAS-Vault: Engineering Upgrade, Zero Trust Architecture & Viva Defense Manual
 
+Current verification status: [20 October 2026 optimization review](OPTIMIZATION-REVIEW-2026-10-20.md). Historical test, benchmark, and deployment claims below are not substitutes for real-camera or cloud acceptance.
+
 ## Executive Summary
 
 **VERITAS-Vault** is a Zero Trust biometric access control, surveillance, and dual-custody physical security platform. The engineering upgrade described herein stabilizes the system across four rigorous engineering phases:
@@ -202,4 +204,4 @@ Benchmarked on Windows with Python 3.14:
 > *The system separates gateway acceptance (`SENT`) from device receipt (`DEVICE_CONFIRMED`). When the Service Worker wakes up on the mobile device upon receiving the push packet, it fires a receipt beacon to `POST /api/push/receipt`, updating the outbox job to `DEVICE_CONFIRMED` with an exact device-level UTC timestamp.*
 
 ---
-**VERITAS-Vault System Status: Production Ready, Fully Verified.**
+**Current status: production acceptance remains incomplete.** See the dated review linked above for measured results and outstanding real-camera, phone, and cloud checks.

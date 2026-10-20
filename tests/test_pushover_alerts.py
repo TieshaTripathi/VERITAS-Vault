@@ -210,10 +210,8 @@ def test_pushover_never_transmits_biometrics_or_keys(tmp_path, monkeypatch):
         assert "private_key" not in str(v).lower()
 
 
-def test_pushover_duplicate_prevention_across_channels(tmp_path, monkeypatch):
-    """Verifies that when Pushover is configured as primary, Telegram and Web Push do NOT fire,
-    and multiple passes do not produce duplicate alerts.
-    """
+def test_native_push_takes_priority_without_duplicate_legacy_alerts(tmp_path, monkeypatch):
+    """Registered PWAs receive the breach even when legacy credentials remain configured."""
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
     store = Store()
     monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test_po_token")
@@ -276,23 +274,22 @@ def test_pushover_duplicate_prevention_across_channels(tmp_path, monkeypatch):
     # First delivery pass
     deliver(job_key, job_data, 0)
 
-    # Pushover must have executed exactly once
-    assert len(pushover_calls) == 1
-    # Telegram and Web Push must NOT have been called (no duplicate notifications)
+    assert len(pushover_calls) == 0
     assert len(telegram_calls) == 0
-    assert not webpush_mock.called
+    assert webpush_mock.call_count == 1
 
     # Second delivery pass with updated state
     updated_job, ver = store.get(job_key)
     assert updated_job["done"] is True
-    assert "pushover" in updated_job["delivered"]
+    assert sub_key in updated_job["delivered"]
+    assert updated_job["status"] == "SENT"
 
     deliver(job_key, updated_job, ver)
 
     # Ensure no second call was made to Pushover or other channels
-    assert len(pushover_calls) == 1
+    assert len(pushover_calls) == 0
     assert len(telegram_calls) == 0
-    assert not webpush_mock.called
+    assert webpush_mock.call_count == 1
 
 
 def test_pushover_failure_retry_progression_and_backoff(tmp_path, monkeypatch):
@@ -579,6 +576,7 @@ def test_pwa_receipt_does_not_halt_pushover_retries(client, monkeypatch, tmp_pat
     """Verifies that a generic PWA Web Push receipt does NOT falsely confirm Pushover delivery or halt Pushover retries."""
     import httpx
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
+    signin(client)
     store = Store()
     monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test_po_token")
     monkeypatch.setenv("PUSHOVER_USER_KEY", "test_po_user")
@@ -638,6 +636,7 @@ def test_pushover_receipt_halts_pushover_retries(client, monkeypatch, tmp_path):
     """Verifies that an explicit Pushover client receipt (channel='pushover') confirms delivery and halts retries."""
     import httpx
     monkeypatch.setenv("VAULT_DATA_DIR", str(tmp_path / "data"))
+    signin(client)
     store = Store()
     monkeypatch.setenv("PUSHOVER_APP_TOKEN", "test_po_token")
     monkeypatch.setenv("PUSHOVER_USER_KEY", "test_po_user")
@@ -667,7 +666,7 @@ def test_pushover_receipt_halts_pushover_retries(client, monkeypatch, tmp_path):
     deliver(job_key, job_data, 0)
     assert call_count["count"] == 1
 
-    # 2. Operator taps Pushover alert link, logs.js posts pushover receipt
+    # 2. Authenticated operator explicitly confirms the legacy receipt
     res = client.post("/api/push/receipt", json={
         "event_id": job_id,
         "channel": "pushover",
