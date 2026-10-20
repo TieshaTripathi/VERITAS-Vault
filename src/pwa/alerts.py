@@ -934,5 +934,7 @@ def send_test_push(store=None):
 def drain_outbox():
     jobs = [(key, value, version) for key, value, version in Store().records("job:")
             if not value.get("done") and value.get("next_at", 0) <= time.time()]
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="vault-alert") as pool:
+    if not jobs:
+        return
+    with ThreadPoolExecutor(max_workers=min(4, len(jobs)), thread_name_prefix="vault-alert") as pool:
         list(pool.map(lambda entry: deliver(*entry), jobs[:4]))
