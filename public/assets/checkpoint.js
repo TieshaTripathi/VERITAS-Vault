@@ -24,6 +24,8 @@ import {
   testSiren,
   shownBreachIds,
   CRITICAL_REASON_CODES,
+  enablePushNotifications,
+  testPush,
 } from "./alerts.js";
 
 const SCAN_INTERVAL = 1100; // 1100ms scan interval
@@ -943,15 +945,18 @@ async function scan() {
    RESET & ACKNOWLEDGE LIFECYCLE
    ========================================================= */
 
-async function resetCheckpoint() {
-  shownBreachIds.clear();
-  clearActiveAlert();
-  manuallyStopped = false;
-
+function closeBreachModal() {
   const modal = $("#breach-modal");
   if (modal && modal.open) {
     try { modal.close(); } catch {}
   }
+}
+
+async function resetCheckpoint() {
+  shownBreachIds.clear();
+  clearActiveAlert();
+  manuallyStopped = false;
+  closeBreachModal();
 
   const modeVal = $("#mode") ? $("#mode").value : "standard";
   const res = await post("/checkpoint/reset", { mode: modeVal });
@@ -965,10 +970,7 @@ async function resetCheckpoint() {
 
 function onAcknowledgeAlert() {
   acknowledgeAlert();
-  const modal = $("#breach-modal");
-  if (modal && modal.open) {
-    try { modal.close(); } catch {}
-  }
+  closeBreachModal();
   updateTelemetry();
 }
 
@@ -981,10 +983,7 @@ $("#start-camera")?.addEventListener("click", () =>
     // 1. Reset any stale previous session to STANDBY
     shownBreachIds.clear();
     clearActiveAlert();
-    const modal = $("#breach-modal");
-    if (modal && modal.open) {
-      try { modal.close(); } catch {}
-    }
+    closeBreachModal();
     try {
       const modeVal = $("#mode") ? $("#mode").value : "standard";
       const resetRes = await post("/checkpoint/reset", { mode: modeVal });
@@ -1009,7 +1008,6 @@ $("#btn-mobile-enable-push")?.addEventListener("click", async () => {
   const btn = $("#btn-mobile-enable-push");
   if (btn) btn.disabled = true;
   try {
-    const { enablePushNotifications } = await import("./alerts.js");
     await enablePushNotifications();
     toast("Security notifications enabled on this device.");
     updateTelemetry();
@@ -1024,7 +1022,6 @@ $("#btn-mobile-test-push")?.addEventListener("click", async () => {
   const btn = $("#btn-mobile-test-push");
   if (btn) btn.disabled = true;
   try {
-    const { testPush } = await import("./alerts.js");
     await testPush();
     toast("Test push notification dispatched.");
   } catch (err) {
@@ -1057,21 +1054,17 @@ document.addEventListener("vault-critical-alert", (e) => {
   }
 });
 
-document.addEventListener("vault-alert-acknowledged", () => {
-  const modal = $("#breach-modal");
-  if (modal && modal.open) {
-    try { modal.close(); } catch {}
-  }
+const onAlertDismissed = () => {
+  closeBreachModal();
   updateTelemetry();
-});
+};
+document.addEventListener("vault-alert-acknowledged", onAlertDismissed);
+document.addEventListener("vault-alert-cleared", onAlertDismissed);
 
-document.addEventListener("vault-alert-cleared", () => {
-  const modal = $("#breach-modal");
-  if (modal && modal.open) {
-    try { modal.close(); } catch {}
-  }
-  updateTelemetry();
-});
+// Cached DOM element references for 100ms countdown timer to prevent DOM querying churn
+const timerEl = $("#timer");
+const deadlineNoteEl = $("#deadline-note");
+const waitingActionTextEl = $("#waiting-action-text");
 
 // Single countdown timer tick (100ms) for smooth dial ring
 setInterval(() => {
@@ -1081,19 +1074,17 @@ setInterval(() => {
   if (state === "WAITING") {
     const remaining = Math.max(0, (end - performance.now()) / 1000);
     const remText = remaining.toFixed(1) + "s remaining";
-    const deadlineNote = $("#deadline-note");
-    if (deadlineNote) deadlineNote.textContent = `Awaiting second authorized party · ${remText}`;
-    const wText = $("#waiting-action-text");
-    if (wText) wText.textContent = `Second authorized person must appear within ${remText}.`;
+    if (deadlineNoteEl) deadlineNoteEl.textContent = `Awaiting second authorized party · ${remText}`;
+    if (waitingActionTextEl) waitingActionTextEl.textContent = `Second authorized person must appear within ${remText}.`;
 
-    ring($("#timer"), state, remaining, 15);
+    ring(timerEl, state, remaining, 15);
 
     // If temporal window has expired, poll tick once to let backend register ZT-008 breach
     if (remaining <= 0 && !busy) {
       post("/checkpoint/tick").then(display).catch(() => {});
     }
   } else {
-    ring($("#timer"), state, state === "STANDBY" ? 15.0 : 0, 15);
+    ring(timerEl, state, state === "STANDBY" ? 15.0 : 0, 15);
   }
 }, 100);
 
