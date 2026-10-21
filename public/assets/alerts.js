@@ -214,16 +214,27 @@ export async function enablePushNotifications() {
 
   const subJson = sub.toJSON();
   const isMobile = /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent);
-  await post("/push/subscribe", {
-    endpoint: sub.endpoint,
-    keys: {
-      p256dh: subJson.keys?.p256dh || "",
-      auth: subJson.keys?.auth || "",
-    },
-    device_label: isMobile ? "Mobile PWA Device" : "Desktop Operations Console",
-  });
-  dispatchAlertEvent("vault-push-changed", { subscribed: true });
-  return sub;
+  try {
+    const res = await post("/push/subscribe", {
+      endpoint: sub.endpoint,
+      keys: {
+        p256dh: subJson.keys?.p256dh || "",
+        auth: subJson.keys?.auth || "",
+      },
+      device_label: isMobile ? "Mobile PWA Device" : "Desktop Operations Console",
+    });
+    if (!res || res.subscribed !== true) {
+      throw new Error(res?.detail || res?.error || "Push subscription could not be saved to server.");
+    }
+    dispatchAlertEvent("vault-push-changed", { subscribed: true });
+    return sub;
+  } catch (err) {
+    try {
+      await sub.unsubscribe();
+    } catch {}
+    dispatchAlertEvent("vault-push-changed", { subscribed: false, error: err.message });
+    throw err;
+  }
 }
 
 export async function disablePushNotifications() {

@@ -204,7 +204,8 @@ def get_active_subscriptions(store):
                     "active": True,
                 }
         except Exception as exc:
-            logger.warning("Failed to fetch push subscriptions from Supabase: %s", exc)
+            diag = getattr(exc, "safe_diagnostic", None) or str(exc)
+            logger.warning("Failed to fetch push subscriptions from Supabase: %s [%s]", exc, diag)
 
     for k, v, _ in store.records("push:"):
         if v.get("active") and k not in subs:

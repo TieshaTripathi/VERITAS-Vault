@@ -25,6 +25,7 @@ import {
   shownBreachIds,
   CRITICAL_REASON_CODES,
   enablePushNotifications,
+  getPushSubscription,
   testPush,
 } from "./alerts.js";
 
@@ -600,12 +601,15 @@ function updateTelemetry() {
     if (typeof window === "undefined" || !("Notification" in window)) {
       pushStatusEl.textContent = "UNSUPPORTED";
       pushStatusEl.style.color = "#91a5bc";
-    } else if (Notification.permission === "granted") {
-      pushStatusEl.textContent = "ACTIVE";
-      pushStatusEl.style.color = "var(--green)";
     } else if (Notification.permission === "denied") {
       pushStatusEl.textContent = "BLOCKED";
       pushStatusEl.style.color = "var(--red)";
+    } else if (localPushActive) {
+      pushStatusEl.textContent = "ACTIVE";
+      pushStatusEl.style.color = "var(--green)";
+    } else if (Notification.permission === "granted") {
+      pushStatusEl.textContent = "READY (UNSUBSCRIBED)";
+      pushStatusEl.style.color = "var(--amber, #f59e0b)";
     } else {
       pushStatusEl.textContent = "READY";
       pushStatusEl.style.color = "var(--cyan)";
@@ -614,7 +618,7 @@ function updateTelemetry() {
 
   const mobBadge = $("#mobile-push-badge");
   if (mobBadge) {
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+    if (localPushActive) {
       mobBadge.textContent = "ACTIVE";
       mobBadge.className = "badge GRANTED";
     } else {
@@ -1100,14 +1104,31 @@ function initMonitorPolling() {
   }
 }
 
-document.addEventListener("vault-push-changed", () => {
+let localPushActive = false;
+async function refreshPushState() {
+  try {
+    const sub = await getPushSubscription();
+    localPushActive = Boolean(sub);
+  } catch {
+    localPushActive = false;
+  }
   updateTelemetry();
+}
+
+document.addEventListener("vault-push-changed", (e) => {
+  if (e?.detail && typeof e.detail.subscribed === "boolean") {
+    localPushActive = e.detail.subscribed;
+    updateTelemetry();
+  } else {
+    refreshPushState();
+  }
 });
 
 document.addEventListener("vault-auth", async () => {
   manuallyStopped = false;
   initAudio();
   setStartupStatus("AUTHENTICATED");
+  refreshPushState();
   if (currentUser?.role === "monitor") {
     initMonitorPolling();
     try {
@@ -1124,6 +1145,7 @@ if (currentUser?.role === "monitor") {
 } else {
   setCameraOffUI();
 }
+refreshPushState();
 
 addEventListener("pagehide", stop);
 addEventListener("offline", () => {
