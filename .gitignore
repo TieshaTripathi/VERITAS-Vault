@@ -19,7 +19,8 @@ __pycache__/
 htmlcov/
 *.egg-info/
 dist/
-build/
+/build/
+!contracts/build/
 
 # ─── Databases ────────────────────────────────────────────────────
 *.db
