@@ -260,7 +260,14 @@ $("#btn-test-push")?.addEventListener("click", () =>
     if (!currentUser || currentUser.role !== "admin") throw new Error("Administrator sign-in required.");
     const res = await testPush();
     if (res.sent > 0) {
-      toast(`Test push delivered to ${res.sent} active device(s).`);
+      if (res.failed > 0) {
+        toast(`Test push: ${res.sent} delivered, ${res.failed} failed. Check server logs/diagnostics.`, "warning");
+      } else {
+        toast(`Test push delivered to ${res.sent} active device(s).`);
+      }
+    } else if (res.failed > 0) {
+      const diagMsg = (res.diagnostics && res.diagnostics.length > 0) ? res.diagnostics[0] : res.error;
+      toast(`Test push failed (${res.failed} device(s)): ${diagMsg || "Check server logs"}`, "error");
     } else {
       toast(res.error || "No active push subscriptions found. Click 'Enable Security Notifications' first.");
     }

@@ -125,15 +125,158 @@ def settings(store):
         "CALLMEBOT_API_KEY": overrides.get("CALLMEBOT_API_KEY", os.environ.get("CALLMEBOT_API_KEY", "")),
         "VAPID_PUBLIC_KEY": overrides.get("VAPID_PUBLIC_KEY", os.environ.get("VAPID_PUBLIC_KEY", "")),
         "VAPID_PRIVATE_KEY": overrides.get("VAPID_PRIVATE_KEY", os.environ.get("VAPID_PRIVATE_KEY", "")),
-        "VAPID_SUBJECT": overrides.get("VAPID_SUBJECT", os.environ.get("VAPID_SUBJECT", "mailto:security@veritas-vault.internal")),
+        "VAPID_SUBJECT": overrides.get("VAPID_SUBJECT", os.environ.get("VAPID_SUBJECT", "mailto:security@veritas-vault.org")),
+    }
+
+
+def normalize_vapid_subject(subject: str | None) -> str:
+    """Ensure VAPID subject claim is a valid URI conformant with RFC 8292 and Apple APNs requirements.
+    Apple rejects non-standard/unaccredited TLDs (such as .internal) with HTTP 400 BadVapidSubject.
+    """
+    subj = (subject or "").strip()
+    if not subj or subj.endswith(".internal") or "@veritas-vault.internal" in subj:
+        return "mailto:security@veritas-vault.org"
+    if not (subj.startswith("mailto:") or subj.startswith("https://")):
+        return f"mailto:{subj}"
+    return subj
+
+
+def verify_vapid_key_consistency(private_key_str: str, public_key_str: str) -> tuple[bool, str]:
+    """Verify that VAPID_PUBLIC_KEY matches the EC SECP256R1 public key derived from VAPID_PRIVATE_KEY.
+    Apple APNs strictly rejects push requests with 403 DeviceTokenNotForTopic or 401 BadJwtToken
+    if the subscription's applicationServerKey does not match the private key signature.
+    Returns (is_consistent, status_message).
+    """
+    if not private_key_str or not public_key_str:
+        return False, "Missing VAPID private or public key"
+    try:
+        from py_vapid import Vapid
+        from cryptography.hazmat.primitives import serialization
+        import base64
+
+        vapid = Vapid.from_string(private_key_str.strip())
+        derived_pub_bytes = vapid.public_key.public_bytes(
+            encoding=serialization.Encoding.X962,
+            format=serialization.PublicFormat.UncompressedPoint
+        )
+        derived_b64 = base64.urlsafe_b64encode(derived_pub_bytes).decode("utf-8").rstrip("=")
+        expected_b64 = public_key_str.strip().rstrip("=")
+        if derived_b64 == expected_b64:
+            return True, "VAPID keypair consistent"
+        return False, "VAPID public key does not match private key derivation (mismatched keypair)"
+    except Exception as exc:
+        return False, f"VAPID key validation failed: {str(exc)}"
+
+
+def mask_push_endpoint(endpoint: str) -> str:
+    """Mask a push subscription endpoint for safe logging and diagnostic reporting.
+    Never exposes raw subscription tokens, authorization paths, or query parameters.
+    Format: https://<hostname>/...[sha256:8]
+    """
+    if not endpoint or not isinstance(endpoint, str):
+        return "[invalid-endpoint]"
+    try:
+        url = urlparse(endpoint)
+        host = url.hostname or "unknown-host"
+        fp = hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:8]
+        return f"https://{host}/...[{fp}]"
+    except Exception:
+        return "[masked-endpoint]"
+
+
+def get_push_provider(endpoint: str) -> str:
+    """Classify push endpoint by provider without revealing endpoint secrets."""
+    if not endpoint or not isinstance(endpoint, str):
+        return "unknown"
+    try:
+        host = (urlparse(endpoint).hostname or "").lower()
+        if host == "push.apple.com" or host.endswith(".push.apple.com") or host.endswith("-push.apple.com"):
+            return "apple"
+        if host in ("fcm.googleapis.com",) or host.endswith(".googleapis.com") or host.endswith(".google.com"):
+            return "google"
+        if host == "updates.push.services.mozilla.com" or host.endswith(".push.services.mozilla.com") or host.endswith(".mozilla.com"):
+            return "mozilla"
+        if host == "notify.windows.com" or host.endswith(".notify.windows.com"):
+            return "windows"
+        return "other"
+    except Exception:
+        return "unknown"
+
+
+def parse_webpush_error(exc: Exception, provider: str) -> dict:
+    """Parse WebPushException or transport error into safe diagnostic dictionary.
+    Includes Apple Web Push APNs specific interpretations without leaking tokens.
+    """
+    status_code = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    raw_reason = ""
+    retry_after = getattr(exc, "retry_after", None)
+
+    if response is not None:
+        try:
+            content_type = getattr(response, "headers", {}).get("Content-Type", "")
+            if "application/json" in content_type:
+                data = response.json()
+                raw_reason = data.get("reason") or data.get("error") or ""
+            if not raw_reason:
+                text = getattr(response, "text", "")
+                if text and len(text) < 256:
+                    raw_reason = text.strip()
+        except Exception:
+            pass
+
+    diagnostic_hint = ""
+    if provider == "apple":
+        if status_code == 400:
+            if "BadVapidSubject" in raw_reason:
+                diagnostic_hint = "Apple APNs rejected VAPID subject claim (must be valid mailto: or https: URI with accredited TLD)"
+            elif "BadJwtToken" in raw_reason:
+                diagnostic_hint = "Apple APNs rejected VAPID JWT token signature"
+            elif "MissingTopic" in raw_reason:
+                diagnostic_hint = "Apple APNs requires topic matching applicationServerKey"
+            else:
+                diagnostic_hint = f"Apple APNs 400 Bad Request: {raw_reason or 'Invalid request payload or headers'}"
+        elif status_code == 401:
+            diagnostic_hint = "Apple APNs 401 Unauthorized (VAPID authorization failed)"
+        elif status_code == 403:
+            if "DeviceTokenNotForTopic" in raw_reason:
+                diagnostic_hint = "Apple APNs 403 DeviceTokenNotForTopic (subscription token was created with a different VAPID public key than current private key)"
+            else:
+                diagnostic_hint = f"Apple APNs 403 Forbidden: {raw_reason or 'Device token or JWT invalid for push topic'}"
+        elif status_code == 404:
+            diagnostic_hint = "Apple APNs 404 BadDeviceToken (device token unknown to APNs)"
+        elif status_code == 410:
+            diagnostic_hint = "Apple APNs 410 Unregistered (subscription expired or user revoked notifications on iPhone)"
+        elif status_code == 413:
+            diagnostic_hint = "Apple APNs 413 PayloadTooLarge (push payload exceeds APNs Web Push limit of 4096 bytes)"
+        elif status_code == 429:
+            diagnostic_hint = "Apple APNs 429 TooManyRequests (rate limited by Apple)"
+        elif status_code in (500, 502, 503):
+            diagnostic_hint = f"Apple APNs server error HTTP {status_code}"
+    elif provider == "google":
+        if status_code in (404, 410):
+            diagnostic_hint = "Google FCM subscription expired or unregistered"
+        elif status_code == 401:
+            diagnostic_hint = "Google FCM VAPID auth rejected"
+
+    if not diagnostic_hint:
+        if status_code:
+            diagnostic_hint = f"HTTP {status_code}" + (f" ({raw_reason})" if raw_reason else "")
+        else:
+            diagnostic_hint = str(exc) or "Network or push delivery failure"
+
+    return {
+        "status_code": status_code,
+        "reason": raw_reason or (str(status_code) if status_code else "unknown"),
+        "message": diagnostic_hint,
+        "retry_after": retry_after,
     }
 
 
 def ensure_vapid_keys(store):
     cfg = settings(store)
+    cfg["VAPID_SUBJECT"] = normalize_vapid_subject(cfg.get("VAPID_SUBJECT"))
     if cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY"):
-        if not cfg.get("VAPID_SUBJECT"):
-            cfg["VAPID_SUBJECT"] = "mailto:security@veritas-vault.internal"
         return cfg
 
     # Check auto-generated keys in store
@@ -141,7 +284,7 @@ def ensure_vapid_keys(store):
     if saved and saved.get("VAPID_PUBLIC_KEY") and saved.get("VAPID_PRIVATE_KEY"):
         cfg["VAPID_PUBLIC_KEY"] = saved["VAPID_PUBLIC_KEY"]
         cfg["VAPID_PRIVATE_KEY"] = saved["VAPID_PRIVATE_KEY"]
-        cfg["VAPID_SUBJECT"] = cfg.get("VAPID_SUBJECT") or saved.get("VAPID_SUBJECT", "mailto:security@veritas-vault.internal")
+        cfg["VAPID_SUBJECT"] = normalize_vapid_subject(cfg.get("VAPID_SUBJECT") or saved.get("VAPID_SUBJECT"))
         return cfg
 
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -157,7 +300,7 @@ def ensure_vapid_keys(store):
         format=serialization.PublicFormat.UncompressedPoint
     )
     pub_b64 = base64.urlsafe_b64encode(pub_bytes).decode("utf-8").rstrip("=")
-    subject = cfg.get("VAPID_SUBJECT") or "mailto:security@veritas-vault.internal"
+    subject = normalize_vapid_subject(cfg.get("VAPID_SUBJECT"))
 
     auto_keys = {
         "VAPID_PUBLIC_KEY": pub_b64,
@@ -169,11 +312,37 @@ def ensure_vapid_keys(store):
     return cfg
 
 
+def is_valid_push_hostname(host: str) -> bool:
+    if not host:
+        return False
+    host = host.lower()
+    if host in ("fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com"):
+        return True
+    if host == "push.apple.com" or host.endswith(".push.apple.com") or host.endswith("-push.apple.com"):
+        return True
+    if host.endswith(".notify.windows.com"):
+        return True
+    if host.endswith(".push.services.mozilla.com"):
+        return True
+    if host.endswith(".googleapis.com"):
+        return True
+    return False
+
+
 def valid_push_endpoint(endpoint):
-    url = urlparse(endpoint)
-    return url.scheme == "https" and not url.username and not url.password and url.port in (None, 443) and (
-        url.hostname in ("fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com")
-        or (url.hostname or "").endswith(".notify.windows.com"))
+    if not endpoint or not isinstance(endpoint, str):
+        return False
+    try:
+        url = urlparse(endpoint)
+        return (
+            url.scheme == "https"
+            and not url.username
+            and not url.password
+            and url.port in (None, 443)
+            and is_valid_push_hostname(url.hostname or "")
+        )
+    except Exception:
+        return False
 
 
 def get_active_subscriptions(store):
@@ -742,17 +911,35 @@ def deliver(key, job, version):
                 for sub_key, sub in subscriptions:
                     if sub_key in delivered:
                         continue
+                    ep = sub.get("subscription", {}).get("endpoint", "")
+                    provider = get_push_provider(ep)
+                    masked_ep = mask_push_endpoint(ep)
                     try:
-                        webpush(subscription_info=sub["subscription"],
-                                data=push_payload,
-                                vapid_private_key=config["VAPID_PRIVATE_KEY"], vapid_claims={"sub": config["VAPID_SUBJECT"]}, timeout=10)
+                        webpush(
+                            subscription_info=sub["subscription"],
+                            data=push_payload,
+                            vapid_private_key=config["VAPID_PRIVATE_KEY"],
+                            vapid_claims={"sub": config["VAPID_SUBJECT"]},
+                            ttl=86400,
+                            headers={"Urgency": "high"},
+                            timeout=10,
+                        )
                         delivered.add(sub_key)
                     except WebPushException as exc:
+                        err_diag = parse_webpush_error(exc, provider)
+                        logger.warning(
+                            "Web Push breach alert delivery failed to %s [%s]: status=%s reason=%s (%s)",
+                            provider, masked_ep, getattr(exc, "status_code", None), err_diag["reason"], err_diag["message"]
+                        )
                         if exc.response is not None and exc.response.status_code in (404, 410):
                             disable_subscription(store, sub_key, sub)
                         else:
                             errors.append("push")
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            "Web Push breach alert delivery error to %s [%s]: %s",
+                            provider, masked_ep, exc
+                        )
                         errors.append("push")
 
             # 2. Optional Legacy Telegram Alert (if configured in environment)
@@ -920,13 +1107,57 @@ def send_test_push(store=None):
     store = store or Store()
     config = ensure_vapid_keys(store)
     subscriptions = get_active_subscriptions(store)
-    if not (config.get("VAPID_PRIVATE_KEY") and config.get("VAPID_PUBLIC_KEY")):
-        return {"sent": 0, "error": "VAPID keys not configured"}
+
+    priv_key = config.get("VAPID_PRIVATE_KEY", "")
+    pub_key = config.get("VAPID_PUBLIC_KEY", "")
+    if not (priv_key and pub_key):
+        return {
+            "sent": 0,
+            "failed": 0,
+            "total": len(subscriptions),
+            "error": "VAPID keys not configured",
+            "vapid_key_consistent": False,
+            "providers": {},
+            "diagnostics": ["VAPID keys not configured in environment or store"],
+        }
+
+    is_consistent, key_msg = verify_vapid_key_consistency(priv_key, pub_key)
+    subject = normalize_vapid_subject(config.get("VAPID_SUBJECT"))
+
     try:
         from pywebpush import webpush, WebPushException
     except ImportError:
-        return {"sent": 0, "error": "Web Push library (pywebpush) not installed"}
+        return {
+            "sent": 0,
+            "failed": 0,
+            "total": len(subscriptions),
+            "error": "Web Push library (pywebpush) not installed",
+            "vapid_key_consistent": is_consistent,
+            "providers": {},
+            "diagnostics": ["pywebpush is not installed in the python environment"],
+        }
+
     sent = 0
+    failed = 0
+    providers = {}
+    diagnostics = []
+
+    if not is_consistent:
+        diagnostics.append(f"VAPID Key Mismatch Warning: {key_msg}")
+        logger.warning("VAPID key inconsistency detected: %s", key_msg)
+
+    if not subscriptions:
+        return {
+            "sent": 0,
+            "failed": 0,
+            "total": 0,
+            "error": "No active push subscriptions found",
+            "vapid_key_consistent": is_consistent,
+            "vapid_subject": subject,
+            "providers": {},
+            "diagnostics": diagnostics,
+        }
+
     now_tag = f"test-{int(time.time())}"
     payload = json.dumps({
         "title": "VERITAS TEST ALERT",
@@ -935,22 +1166,67 @@ def send_test_push(store=None):
         "tag": now_tag,
         "event_id": now_tag,
     })
+
     for sub_key, sub in subscriptions:
+        sub_info = sub.get("subscription", {})
+        ep = sub_info.get("endpoint", "")
+        provider = get_push_provider(ep)
+        masked_ep = mask_push_endpoint(ep)
+
+        if provider not in providers:
+            providers[provider] = {"total": 0, "sent": 0, "failed": 0, "errors": []}
+        providers[provider]["total"] += 1
+
         try:
             webpush(
-                subscription_info=sub["subscription"],
+                subscription_info=sub_info,
                 data=payload,
-                vapid_private_key=config["VAPID_PRIVATE_KEY"],
-                vapid_claims={"sub": config["VAPID_SUBJECT"]},
+                vapid_private_key=priv_key,
+                vapid_claims={"sub": subject},
+                ttl=86400,
+                headers={"Urgency": "high"},
                 timeout=10,
             )
             sent += 1
+            providers[provider]["sent"] += 1
+            logger.info("Web Push test alert delivered successfully to %s [%s]", provider, masked_ep)
         except WebPushException as exc:
+            failed += 1
+            providers[provider]["failed"] += 1
+            err_diag = parse_webpush_error(exc, provider)
+            err_diag["endpoint_masked"] = masked_ep
+            providers[provider]["errors"].append(err_diag)
+            diag_str = f"{provider.capitalize()} ({masked_ep}): HTTP {exc.status_code} - {err_diag['message']}"
+            diagnostics.append(diag_str)
+            logger.warning(
+                "Web Push test alert delivery failed to %s [%s]: status=%s reason=%s message=%s",
+                provider, masked_ep, getattr(exc, "status_code", None), err_diag["reason"], err_diag["message"]
+            )
             if exc.response is not None and exc.response.status_code in (404, 410):
                 disable_subscription(store, sub_key, sub)
-        except Exception:
-            pass
-    return {"sent": sent, "total": len(subscriptions)}
+        except Exception as exc:
+            failed += 1
+            providers[provider]["failed"] += 1
+            err_diag = {
+                "status_code": None,
+                "reason": type(exc).__name__,
+                "message": str(exc),
+                "endpoint_masked": masked_ep,
+            }
+            providers[provider]["errors"].append(err_diag)
+            diag_str = f"{provider.capitalize()} ({masked_ep}): {str(exc)}"
+            diagnostics.append(diag_str)
+            logger.warning("Web Push test alert delivery exception to %s [%s]: %s", provider, masked_ep, exc)
+
+    return {
+        "sent": sent,
+        "failed": failed,
+        "total": len(subscriptions),
+        "providers": providers,
+        "vapid_key_consistent": is_consistent,
+        "vapid_subject": subject,
+        "diagnostics": diagnostics,
+    }
 
 
 def drain_outbox():
