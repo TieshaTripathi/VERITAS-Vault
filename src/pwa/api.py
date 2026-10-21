@@ -1269,6 +1269,17 @@ class Subscription(BaseModel):
     device_label: str = Field(default="", max_length=128)
 
 
+def generate_subscription_id(endpoint: str) -> str:
+    """Generate a safe, stable, deterministic subscription ID derived from the endpoint.
+
+    Uses standard RFC 4122 UUIDv5 (URL namespace) to guarantee:
+    1. Safe: Standard 36-char hyphenated string, free of special chars or SQL injection risks.
+    2. Stable: Deterministic for a given endpoint across retries, resubscriptions, and restarts.
+    3. Schema-compatible: Valid for both PostgreSQL TEXT (production) and UUID column types.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, endpoint.strip()))
+
+
 @app.post("/api/push/subscribe")
 def subscribe(body: Subscription, user=Depends(monitor_or_above)):
     try:
@@ -1279,17 +1290,31 @@ def subscribe(body: Subscription, user=Depends(monitor_or_above)):
         raise HTTPException(422, "Invalid push subscription")
     key = "push:" + hashlib.sha256(body.endpoint.encode()).hexdigest()
     store = Store()
+    saved = None
+    try:
+        res = store.get(key)
+        if isinstance(res, (tuple, list)) and len(res) >= 1 and isinstance(res[0], dict):
+            saved = res[0]
+    except Exception:
+        saved = None
+
+    if saved and saved.get("active") and saved.get("owner") and saved.get("owner") != user["id"] and user.get("role") != "admin":
+        raise HTTPException(403, "Subscription owner or administrator required")
+
+    sub_id = (saved.get("id") if saved else None) or generate_subscription_id(body.endpoint)
     sub_data = {
+        "id": sub_id,
         "subscription": body.model_dump(),
         "owner": user["id"],
         "device_label": body.device_label or "Web Device",
         "active": True,
-        "created_at": utc(),
+        "created_at": (saved.get("created_at") if saved else None) or utc(),
         "updated_at": utc(),
     }
     if store.cloud:
         try:
             store.cloud.request("POST", "/rest/v1/push_subscriptions", json={
+                "id": sub_id,
                 "user_id": user["id"],
                 "endpoint": body.endpoint,
                 "p256dh": body.keys["p256dh"],
