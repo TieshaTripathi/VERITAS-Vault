@@ -108,17 +108,14 @@ self.addEventListener("push", (event) => {
 
   // WebKit on iOS Safari throws/rejects if unsupported options (like requireInteraction) are passed.
   // Fallback to baseOptions ensures notification is always rendered on iPhone.
+  // If the fallback display also fails, the promise rejects so no false receipt is recorded.
   const showNotificationWithFallback = async () => {
     if (!self.registration || !self.registration.showNotification) return;
     try {
       return await self.registration.showNotification(title, fullOptions);
     } catch (err) {
       console.warn("showNotification fullOptions failed, falling back for WebKit/iOS:", err);
-      try {
-        return await self.registration.showNotification(title, baseOptions);
-      } catch (fallbackErr) {
-        console.error("showNotification fallback failed:", fallbackErr);
-      }
+      return await self.registration.showNotification(title, baseOptions);
     }
   };
 
@@ -138,11 +135,7 @@ self.addEventListener("push", (event) => {
       }).catch(() => {})
     : Promise.resolve();
 
-  event.waitUntil(
-    showNotificationWithFallback()
-      .then(sendReceipt)
-      .catch((err) => console.warn("Push event handling error:", err))
-  );
+  event.waitUntil(showNotificationWithFallback().then(sendReceipt));
 });
 
 self.addEventListener("notificationclick", (event) => {

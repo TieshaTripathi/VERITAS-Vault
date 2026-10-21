@@ -47,3 +47,26 @@ test("failed notification display never claims device receipt", async () => {
   await assert.rejects(pending, /permission denied/);
   assert.equal(requests.length, 0);
 });
+
+test("unsupported options trigger fallback to baseOptions and record device receipt on success", async () => {
+  let attempts = 0;
+  const recordedOptions = [];
+  const { handlers, requests } = worker(async (title, options) => {
+    attempts++;
+    recordedOptions.push(options);
+    if (attempts === 1) {
+      throw new TypeError("Invalid notification option: requireInteraction");
+    }
+  });
+  let pending;
+  handlers.push({
+    data: { json: () => ({ event_id: "event-fallback", receipt_token: "proof-fallback" }) },
+    waitUntil: (promise) => { pending = promise; },
+  });
+  await pending;
+  assert.equal(attempts, 2);
+  assert.equal(recordedOptions[0].requireInteraction, true);
+  assert.equal(recordedOptions[1].requireInteraction, undefined);
+  assert.equal(requests.length, 1);
+  assert.equal(JSON.parse(requests[0].options.body).receipt_token, "proof-fallback");
+});
