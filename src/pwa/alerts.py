@@ -192,6 +192,7 @@ def get_active_subscriptions(store):
                     continue
                 k = "push:" + hashlib.sha256(ep.encode()).hexdigest()
                 subs[k] = {
+                    "id": row.get("id"),
                     "subscription": {
                         "endpoint": ep,
                         "keys": {
