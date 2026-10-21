@@ -1,0 +1,11 @@
+{
+  "network": "sepolia-dry-run",
+  "chainId": 11155111,
+  "contractAddress": "0xF2E246BB76DF876Cef8b38ae84130F4F55De395b",
+  "transactionHash": "6efc85d2d154ec0c49287583e0b01669e9f50993cac7e716f1c7c8089218294d",
+  "blockNumber": 1,
+  "deployer": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+  "deployedAt": "2026-10-21T19:26:33Z",
+  "verified": true,
+  "notes": "Simulated local dry-run deployment for CI and testing."
+}
