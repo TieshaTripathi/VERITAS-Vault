@@ -42,6 +42,7 @@ from src.pwa.alerts import (
     settings,
     valid_push_endpoint,
     push_receipt_token,
+    verify_vapid_key_consistency,
 )
 from src.pwa.policy import advance, fresh, WINDOW_SECONDS
 from src.pwa.security import ROOT, check_password, encryption_key, seal, unseal
@@ -1356,9 +1357,13 @@ def push_status(user=Depends(monitor_or_above)):
     store = Store()
     cfg = ensure_vapid_keys(store)
     active = get_active_subscriptions(store)
+    priv = cfg.get("VAPID_PRIVATE_KEY", "")
+    pub = cfg.get("VAPID_PUBLIC_KEY", "")
+    consistent, _ = verify_vapid_key_consistency(priv, pub) if priv and pub else (False, "Not configured")
     return {
         "configured": bool(cfg.get("VAPID_PUBLIC_KEY") and cfg.get("VAPID_PRIVATE_KEY")),
         "subscriptions": len(active),
+        "vapid_key_consistent": consistent,
     }
 
 

@@ -85,19 +85,41 @@ self.addEventListener("push", (event) => {
     payload.url ||
     (event_id ? `/audit?event=${encodeURIComponent(event_id)}` : "/audit");
 
-  const options = {
+  // Base options supported by all standards-compliant browsers including WebKit on iOS
+  const baseOptions = {
     body: body,
     icon: payload.icon || "/icons/icon-192.png",
-    badge: payload.badge || "/icons/icon-192.png",
     tag: event_id || "vault-breach",
-    renotify: true,
-    requireInteraction: true,
     data: {
       event_id: event_id,
       url: targetUrl,
       received_at: Date.now(),
       ...payload,
     },
+  };
+
+  // Extended options (badge, renotify, requireInteraction)
+  const fullOptions = {
+    ...baseOptions,
+    badge: payload.badge || "/icons/icon-192.png",
+    renotify: true,
+    requireInteraction: true,
+  };
+
+  // WebKit on iOS Safari throws/rejects if unsupported options (like requireInteraction) are passed.
+  // Fallback to baseOptions ensures notification is always rendered on iPhone.
+  const showNotificationWithFallback = async () => {
+    if (!self.registration || !self.registration.showNotification) return;
+    try {
+      return await self.registration.showNotification(title, fullOptions);
+    } catch (err) {
+      console.warn("showNotification fullOptions failed, falling back for WebKit/iOS:", err);
+      try {
+        return await self.registration.showNotification(title, baseOptions);
+      } catch (fallbackErr) {
+        console.error("showNotification fallback failed:", fallbackErr);
+      }
+    }
   };
 
   // Device-side delivery confirmation back to backend
@@ -116,12 +138,11 @@ self.addEventListener("push", (event) => {
       }).catch(() => {})
     : Promise.resolve();
 
-  const notifyPromise =
-    self.registration && self.registration.showNotification
-      ? self.registration.showNotification(title, options)
-      : Promise.resolve();
-
-  event.waitUntil(notifyPromise.then(sendReceipt));
+  event.waitUntil(
+    showNotificationWithFallback()
+      .then(sendReceipt)
+      .catch((err) => console.warn("Push event handling error:", err))
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
