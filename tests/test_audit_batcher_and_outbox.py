@@ -441,3 +441,47 @@ def test_poison_pill_crash_loop_prevention(clean_store):
     claimed = manager.claim_jobs(network="sepolia", worker_id="new-worker")
     assert len(claimed) == 0
 
+
+def test_supabase_migration_integrity():
+    """
+    Validates the static SQL structure, security policies, and invariants
+    of supabase/migrations/20261023_blockchain_outbox.sql.
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    migration_path = root / "supabase" / "migrations" / "20261023_blockchain_outbox.sql"
+    assert migration_path.exists()
+
+    sql = migration_path.read_text(encoding="utf-8")
+
+    # 1. Transaction wrapping
+    assert "begin;" in sql
+    assert sql.strip().endswith("commit;")
+
+    # 2. Key tables created
+    assert "create table if not exists public.audit_batches" in sql
+    assert "create table if not exists public.blockchain_outbox" in sql
+
+    # 3. Unique composite constraint preventing duplicate network-batch jobs
+    assert "create unique index if not exists idx_outbox_network_batch on public.blockchain_outbox(network, batch_id);" in sql
+
+    # 4. Composite claiming indexes
+    assert "idx_outbox_claim_pending" in sql
+    assert "idx_outbox_claim_lease" in sql
+
+    # 5. Row Level Security & strict privilege revocation
+    assert "alter table public.audit_batches enable row level security;" in sql
+    assert "alter table public.blockchain_outbox enable row level security;" in sql
+    assert "revoke all on public.audit_batches, public.blockchain_outbox from public, anon, authenticated;" in sql
+    assert "grant select, insert, update, delete on public.audit_batches, public.blockchain_outbox to service_role;" in sql
+
+    # 6. Database-level atomic claiming function with SKIP LOCKED
+    assert "create or replace function public.claim_blockchain_outbox_jobs" in sql
+    assert "for update skip locked" in sql
+    assert "security definer" in sql
+    assert "set search_path = public, pg_temp" in sql
+
+    # 7. Expired lease recovery function
+    assert "create or replace function public.recover_expired_outbox_leases" in sql
+
+
