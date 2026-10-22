@@ -1367,6 +1367,17 @@ def push_test(user=Depends(monitor_or_above)):
     return send_test_push()
 
 
+@app.get("/api/blockchain/status")
+def blockchain_status(user=Depends(monitor_or_above)):
+    """
+    Returns connection health and state of the Ethereum Sepolia AuditAnchor contract.
+    Protected endpoint: requires authenticated operator, admin, or monitor.
+    """
+    rate_limit("blockchain-status:" + user["id"], limit=60)
+    from src.blockchain.sepolia_adapter import get_sepolia_adapter
+    return get_sepolia_adapter().get_status()
+
+
 class FCMTokenRegistration(BaseModel):
     fcm_token: str = Field(max_length=4096)
     device_label: str = Field(default="Mobile Monitor Phone", max_length=128)
