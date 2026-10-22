@@ -1370,12 +1370,19 @@ def push_test(user=Depends(monitor_or_above)):
 @app.get("/api/blockchain/status")
 def blockchain_status(user=Depends(monitor_or_above)):
     """
-    Returns connection health and state of the Ethereum Sepolia AuditAnchor contract.
+    Returns connection health and state of the Ethereum Sepolia AuditAnchor contract
+    along with durable outbox queue metrics.
     Protected endpoint: requires authenticated operator, admin, or monitor.
     """
     rate_limit("blockchain-status:" + user["id"], limit=60)
     from src.blockchain.sepolia_adapter import get_sepolia_adapter
-    return get_sepolia_adapter().get_status()
+    from src.blockchain.outbox import get_outbox_manager
+    status = get_sepolia_adapter().get_status()
+    try:
+        status["outbox"] = get_outbox_manager().get_diagnostics()
+    except Exception as e:
+        status["outbox"] = {"error": str(e), "total_batches_persisted": 0, "outbox_queues": {}}
+    return status
 
 
 class FCMTokenRegistration(BaseModel):

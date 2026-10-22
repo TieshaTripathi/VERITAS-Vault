@@ -262,6 +262,9 @@ def test_blockchain_status_endpoint_authorized(auth_headers_and_cookies):
         assert data["owner"] == MOCK_OWNER
         assert data["totalAnchors"] == 0
         assert data["latestBlock"] == 11972007
+        assert "outbox" in data
+        assert "outbox_queues" in data["outbox"]
+        assert "sepolia" in data["outbox"]["outbox_queues"]
     finally:
         set_sepolia_adapter(None)
 
