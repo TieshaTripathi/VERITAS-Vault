@@ -91,37 +91,3 @@ class LocalLedgerAdapter(LedgerAdapter):
             return True
         return False
 
-
-class HyperledgerFabricAdapter(LedgerAdapter):
-    """
-    Interface reserved for future enterprise Hyperledger Fabric integration.
-    """
-    def __init__(self, channel_name: str = "vaultchannel", chaincode: str = "veritas_audit"):
-        self.channel_name = channel_name
-        self.chaincode = chaincode
-
-    def anchor_root(self, batch: MerkleBatch) -> LedgerAnchorRecord:
-        raise NotImplementedError("Hyperledger Fabric connection profile not configured.")
-
-    def get_anchor(self, batch_id: str) -> Optional[LedgerAnchorRecord]:
-        raise NotImplementedError("Hyperledger Fabric connection profile not configured.")
-
-    def verify_anchor(self, batch_id: str) -> bool:
-        raise NotImplementedError("Hyperledger Fabric connection profile not configured.")
-
-
-class QuorumAdapter(LedgerAdapter):
-    """
-    Interface reserved for future ConsenSys Quorum / Enterprise Ethereum integration.
-    """
-    def __init__(self, rpc_url: Optional[str] = None):
-        self.rpc_url = rpc_url
-
-    def anchor_root(self, batch: MerkleBatch) -> LedgerAnchorRecord:
-        raise NotImplementedError("Quorum RPC endpoint not configured.")
-
-    def get_anchor(self, batch_id: str) -> Optional[LedgerAnchorRecord]:
-        raise NotImplementedError("Quorum RPC endpoint not configured.")
-
-    def verify_anchor(self, batch_id: str) -> bool:
-        raise NotImplementedError("Quorum RPC endpoint not configured.")
