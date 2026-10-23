@@ -7,7 +7,7 @@
     "dev": "python -m uvicorn app:app --host 127.0.0.1 --port 8502",
     "build": "python scripts/build_shell.py",
     "test": "python -m pytest --basetemp=.pytest_tmp -q -p no:cacheprovider",
-    "test:pg": "node tests/test_migration_postgres.mjs"
+    "test:pg": "node scripts/test_migration_postgres.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.16",

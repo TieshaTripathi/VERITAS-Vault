@@ -13,10 +13,19 @@
  * 9. Expired lease recovery RPC
  */
 
-import { PGlite } from '@electric-sql/pglite';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+let PGlite;
+try {
+  ({ PGlite } = await import('@electric-sql/pglite'));
+} catch {
+  console.error(
+    "Missing dependency: '@electric-sql/pglite'. Run 'npm install' before running isolated PostgreSQL migration tests."
+  );
+  process.exit(1);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
