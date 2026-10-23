@@ -57,11 +57,20 @@ from src.vision.biometric_service import default_biometric_service
 logger = logging.getLogger("vault.api")
 
 
+def drain_blockchain_outbox():
+    try:
+        from src.blockchain.outbox import get_outbox_manager
+        get_outbox_manager().recover_expired_leases()
+    except Exception as exc:
+        logger.warning("Blockchain lease recovery error: %s", exc)
+
+
 async def alert_worker_loop():
     """Automatic alert worker loop running in background without requiring HTTP traffic."""
     while True:
         try:
             await run_in_threadpool(drain_outbox)
+            await run_in_threadpool(drain_blockchain_outbox)
         except asyncio.CancelledError:
             break
         except Exception as exc:
@@ -1446,6 +1455,7 @@ def worker(request: Request):
         raise HTTPException(401, "Worker authorization required")
     transition()
     drain_outbox()
+    drain_blockchain_outbox()
     return {"ok": True}
 
 

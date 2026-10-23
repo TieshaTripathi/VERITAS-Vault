@@ -194,10 +194,57 @@ async function load() {
     } catch (pushErr) {
       console.warn("Failed to retrieve push status:", pushErr);
     }
+
+    // Query Blockchain Anchor & Outbox status
+    try {
+      const bc = await api("/blockchain/status");
+      const isConnected = Boolean(bc.connected);
+      const chainBadge = $("#chain-badge");
+      const chainStatus = $("#chain-status");
+      const totalAnchors = $("#chain-total-anchors");
+      const latestBlock = $("#chain-latest-block");
+
+      if (chainBadge) {
+        chainBadge.textContent = isConnected ? "ANCHORED" : (bc.error ? "OFFLINE" : "STANDBY");
+        chainBadge.className = isConnected ? "badge GRANTED" : (bc.error ? "badge BREACH" : "badge WAITING");
+      }
+      if (chainStatus) {
+        chainStatus.textContent = isConnected ? `ACTIVE (${bc.latencyMs ? Math.round(bc.latencyMs) + "ms" : "OK"})` : (bc.error || "UNREACHABLE");
+        chainStatus.style.color = isConnected ? "#10b981" : "#ef4444";
+      }
+      if (totalAnchors) {
+        totalAnchors.textContent = bc.totalAnchors !== null && bc.totalAnchors !== undefined ? String(bc.totalAnchors) : "0";
+      }
+      if (latestBlock) {
+        latestBlock.textContent = bc.latestBlock ? `#${bc.latestBlock}` : "—";
+      }
+
+      if (bc.outbox) {
+        const ob = bc.outbox;
+        const q = ob.outbox_queues?.sepolia || {};
+        if ($("#chain-batches-count")) $("#chain-batches-count").textContent = String(ob.total_batches_persisted || 0);
+        if ($("#chain-pending-count")) $("#chain-pending-count").textContent = String(q.pending || 0);
+        if ($("#chain-confirmed-count")) $("#chain-confirmed-count").textContent = String(q.confirmed || 0);
+        if ($("#chain-retrying-count")) $("#chain-retrying-count").textContent = String(q.retrying || 0);
+      }
+    } catch (bcErr) {
+      console.warn("Failed to retrieve blockchain status:", bcErr);
+      if ($("#chain-badge")) {
+        $("#chain-badge").textContent = "OFFLINE";
+        $("#chain-badge").className = "badge WAITING";
+      }
+    }
   } catch (error) {
     toast(error.message);
   }
 }
+
+$("#btn-refresh-blockchain")?.addEventListener("click", () =>
+  action($("#btn-refresh-blockchain"), async () => {
+    await load();
+    toast("Blockchain status refreshed.");
+  }),
+);
 
 $("#btn-test-pushover")?.addEventListener("click", () =>
   action($("#btn-test-pushover"), async () => {

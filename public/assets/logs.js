@@ -97,13 +97,19 @@ function inspect(event) {
     "SHA-256 / decoded frame": event.sha256_hash || "No frame attached",
     Storage: event.status || "ENCRYPTED / SUPABASE",
     "Encryption key ID": event.evidence?.key_id || "primary-v1",
+    ...(event.chain_sequence !== undefined && event.chain_sequence !== null ? {
+      "Audit chain sequence": `#${event.chain_sequence}`,
+      "Audit event hash": event.event_hash || "—",
+      "Ed25519 signature": event.signature || "—",
+      "Signer key ID": event.signer_key_id || "ed25519-node-primary-v1",
+    } : {}),
   };
   for (const [label, value] of Object.entries(fields)) {
     const dt = document.createElement("dt"),
       dd = document.createElement("dd");
     dt.textContent = label;
     dd.textContent = value;
-    if (label.includes("SHA-256") && event.sha256_hash) {
+    if ((label.includes("SHA-256") || label.includes("hash") || label.includes("signature")) && value && value !== "—" && !value.includes("No frame")) {
       const copyBtn = document.createElement("button");
       copyBtn.className = "quiet";
       copyBtn.style.cssText = "margin-left: 8px; padding: 2px 8px; font-size: 11px; vertical-align: middle;";
@@ -111,8 +117,8 @@ function inspect(event) {
       copyBtn.onclick = async (e) => {
         e.preventDefault();
         try {
-          await navigator.clipboard.writeText(event.sha256_hash);
-          toast("Copied SHA-256 Digest!");
+          await navigator.clipboard.writeText(value);
+          toast(`Copied ${label}!`);
         } catch {
           toast("Clipboard permission denied");
         }

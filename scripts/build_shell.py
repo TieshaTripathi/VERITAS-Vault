@@ -208,7 +208,37 @@ CONTROL = f'''<div class="control-grid"><div class="stack"><section class="panel
   <div class="config-status">Audit Ledger<span id="audit-status">VERIFIED</span></div>
   <div class="config-status">Local Siren<span id="audio-status">READY</span></div>
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
-</div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section></div>
+</div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section>
+<section class="panel" id="blockchain-panel"><div class="panel-head"><h2 class="section-label">SEPOLIA BLOCKCHAIN ANCHOR</h2><span class="badge" id="chain-badge">CHECKING...</span></div>
+<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Cryptographic Merkle roots of audit events are anchored asynchronously to Ethereum Sepolia via durable outbox queues.</p>
+<div class="config-grid" style="margin-bottom:12px;">
+  <div class="config-status">Network<strong id="chain-network" style="font-size:13px;">Sepolia (11155111)</strong></div>
+  <div class="config-status">Contract State<span id="chain-status" style="font-size:13px;">CHECKING...</span></div>
+  <div class="config-status">Total Anchors<strong id="chain-total-anchors" style="font-size:13px;">0</strong></div>
+  <div class="config-status">Latest Block<strong id="chain-latest-block" style="font-size:13px;">—</strong></div>
+</div>
+<div class="delivery-tracking-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;text-align:center;">
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">BATCHES</div>
+    <strong id="chain-batches-count" style="font-size:13px;color:#e2e8f0;">0</strong>
+  </div>
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">PENDING</div>
+    <strong id="chain-pending-count" style="font-size:13px;color:#f59e0b;">0</strong>
+  </div>
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">CONFIRMED</div>
+    <strong id="chain-confirmed-count" style="font-size:13px;color:#10b981;">0</strong>
+  </div>
+  <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">
+    <div style="color:#91a5bc;font-size:10px;font-weight:700;">RETRYING</div>
+    <strong id="chain-retrying-count" style="font-size:13px;color:#38bdf8;">0</strong>
+  </div>
+</div>
+<div class="form-actions" style="display:flex;gap:10px;flex-direction:column;">
+  <button type="button" id="btn-refresh-blockchain" class="quiet" style="width:100%;">REFRESH BLOCKCHAIN STATUS ⟳</button>
+</div>
+<p class="callout" style="margin-top:14px;">Physical access decisions never wait on blockchain processing. Read-only node verification queries <code>AuditAnchor</code> contract at <code>0x64A6...2995</code>.</p></section></div>
 <div class="stack"><section class="panel" id="pushover-panel"><div class="panel-head"><h2 class="section-label">PUSHOVER / LEGACY FALLBACK</h2><span class="badge" id="pushover-badge">CHECKING...</span></div>
 <p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Optional legacy channel used when no native PWA Web Push device is registered. Enable security notifications in the PWA panel below for native alerts.</p>
 <div class="config-grid" style="margin-bottom:12px;">

@@ -7,12 +7,14 @@ from dotenv import load_dotenv
 load_dotenv()
 from src.pwa.api import transition
 from src.pwa.alerts import drain_outbox
+from src.blockchain.outbox import get_outbox_manager
 
 if __name__ == "__main__":
     while True:
         try:
             transition()
             drain_outbox()
+            get_outbox_manager().recover_expired_leases()
         except Exception:
             print("Worker retry pending: check cloud connectivity/configuration.")
         time.sleep(1)

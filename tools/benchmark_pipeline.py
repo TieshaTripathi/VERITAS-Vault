@@ -28,7 +28,8 @@ import cv2
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.vision.quality import FaceQualityGate
+from src.vision.face_detection import DetectedFace
+from src.vision.face_quality import evaluate_quality
 from src.vision.pad_provider import HeuristicPADProvider
 from src.vision.biometric_provider import TemplateMatchingProvider
 from src.policy.pdp import ZeroTrustPDP
@@ -42,7 +43,6 @@ def run_pipeline_benchmark(iterations: int = 30, output_path: str = "artifacts/p
     print(f"Starting VERITAS-Vault pipeline benchmark ({iterations} iterations)...")
 
     # Initialize components
-    quality_gate = FaceQualityGate()
     pad_provider = HeuristicPADProvider()
     bio_provider = TemplateMatchingProvider()
     pdp = ZeroTrustPDP()
@@ -76,11 +76,19 @@ def run_pipeline_benchmark(iterations: int = 30, output_path: str = "artifacts/p
         "end_to_end_ms": []
     }
 
+    test_face = DetectedFace(
+        bbox=(230, 150, 180, 180),
+        crop=test_frame[150:330, 230:410].copy(),
+        confidence=0.99,
+        landmarks={"left_eye": (285.0, 210.0), "right_eye": (355.0, 210.0)},
+        variance=150.0,
+    )
+
     # Warmup 3 iterations
     for _ in range(3):
         nparr = np.frombuffer(frame_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        _ = quality_gate.evaluate_quality(frame)
+        _ = evaluate_quality(test_face, (480, 640))
         _ = pad_provider.evaluate(frame)
         tmpl = bio_provider.enroll(frame)
         _ = bio_provider.verify(frame, baseline_template)
@@ -98,7 +106,7 @@ def run_pipeline_benchmark(iterations: int = 30, output_path: str = "artifacts/p
 
         # 2. Face quality
         s_start = time.perf_counter()
-        qual_res = quality_gate.evaluate_quality(frame)
+        qual_res = evaluate_quality(test_face, (480, 640))
         s_end = time.perf_counter()
         stage_timings["face_quality_ms"].append((s_end - s_start) * 1000.0)
 
