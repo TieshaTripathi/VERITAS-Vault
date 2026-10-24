@@ -1,0 +1,13 @@
+{
+  "network": "besu",
+  "chainId": 1337,
+  "contractAddress": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "transactionHash": "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "blockNumber": 1,
+  "deployer": "0xfe3b557e8fb62b89f4916b721be55ceb828dbd73",
+  "owner": "0xfe3b557e8fb62b89f4916b721be55ceb828dbd73",
+  "relayer": "0xfe3b557e8fb62b89f4916b721be55ceb828dbd73",
+  "deployedAt": "2026-10-24T04:47:23Z",
+  "verified": true,
+  "simulated": true
+}

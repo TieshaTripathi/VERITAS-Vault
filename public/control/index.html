@@ -11,13 +11,13 @@
   <div class="config-status">Local Siren<span id="audio-status">READY</span></div>
   <div class="config-status">Camera<span id="camera-status">READY</span></div>
 </div><div class="camera-controls" style="margin-top:14px;"><button type="button" id="btn-test-siren" class="button" style="width:100%;">TEST SIREN 🔊</button></div><p class="callout">Supabase URL and credentials are deployment-managed environment variables in Render. Secrets are never exposed to the browser.</p></section>
-<section class="panel" id="blockchain-panel"><div class="panel-head"><h2 class="section-label">SEPOLIA BLOCKCHAIN ANCHOR</h2><span class="badge" id="chain-badge">CHECKING...</span></div>
-<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Cryptographic Merkle roots of audit events are anchored asynchronously to Ethereum Sepolia via durable outbox queues.</p>
+<section class="panel" id="blockchain-panel"><div class="panel-head"><h2 class="section-label">HYBRID BLOCKCHAIN AUDIT ANCHORS</h2><span class="badge" id="chain-badge">CHECKING...</span></div>
+<p style="font-size:13px;color:#91a5bc;margin-bottom:12px;">Cryptographic Merkle roots of audit events are anchored asynchronously to Ethereum Sepolia and Hyperledger Besu via durable outbox queues.</p>
 <div class="config-grid" style="margin-bottom:12px;">
-  <div class="config-status">Network<strong id="chain-network" style="font-size:13px;">Sepolia (11155111)</strong></div>
-  <div class="config-status">Contract State<span id="chain-status" style="font-size:13px;">CHECKING...</span></div>
-  <div class="config-status">Total Anchors<strong id="chain-total-anchors" style="font-size:13px;">0</strong></div>
-  <div class="config-status">Latest Block<strong id="chain-latest-block" style="font-size:13px;">—</strong></div>
+  <div class="config-status">Sepolia (11155111)<span id="chain-status" style="font-size:13px;">CHECKING...</span></div>
+  <div class="config-status">Besu QBFT (1337)<span id="besu-status" style="font-size:13px;">CHECKING...</span></div>
+  <div class="config-status">Sepolia Anchors<strong id="chain-total-anchors" style="font-size:13px;">0</strong></div>
+  <div class="config-status">Besu Anchors<strong id="besu-total-anchors" style="font-size:13px;">0</strong></div>
 </div>
 <div class="delivery-tracking-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;text-align:center;">
   <div style="background:rgba(255,255,255,0.03);padding:6px 4px;border-radius:6px;border:1px solid rgba(255,255,255,0.08);">

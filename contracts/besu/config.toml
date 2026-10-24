@@ -1,0 +1,25 @@
+# Hyperledger Besu QBFT Minimal Configuration for VERITAS-Vault
+# Optimized for 16GB RAM laptop dev environments (heap <= 512MB)
+genesis-file = "contracts/besu/genesis.json"
+data-path = "data/besu"
+network-id = 1337
+
+# Minimal Memory & Resource Profile
+Xmx = "512m"
+
+# P2P Networking (Disabled for local single-validator dev node)
+p2p-enabled = false
+
+# HTTP JSON-RPC
+rpc-http-enabled = true
+rpc-http-host = "127.0.0.1"
+rpc-http-port = 8545
+rpc-http-api = ["ETH", "NET", "WEB3", "QBFT"]
+rpc-http-cors-origins = ["*"]
+
+# Mining / Block Production
+miner-enabled = true
+miner-coinbase = "0xfe3b557e8fb62b89f4916b721be55ceb828dbd73"
+
+# Zero Gas Price Configuration
+min-gas-price = 0

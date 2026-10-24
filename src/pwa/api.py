@@ -1407,13 +1407,18 @@ def push_test(user=Depends(monitor_or_above)):
 def blockchain_status(user=Depends(monitor_or_above)):
     """
     Returns connection health and state of the Ethereum Sepolia AuditAnchor contract
-    along with durable outbox queue metrics.
+    along with Hyperledger Besu status and durable outbox queue metrics.
     Protected endpoint: requires authenticated operator, admin, or monitor.
     """
     rate_limit("blockchain-status:" + user["id"], limit=60)
     from src.blockchain.sepolia_adapter import get_sepolia_adapter
+    from src.blockchain.besu_adapter import get_besu_adapter
     from src.blockchain.outbox import get_outbox_manager
     status = get_sepolia_adapter().get_status()
+    try:
+        status["besu"] = get_besu_adapter().get_status()
+    except Exception as be:
+        status["besu"] = {"network": "besu", "connected": False, "error": str(be)}
     try:
         status["outbox"] = get_outbox_manager().get_diagnostics()
     except Exception as e:
@@ -1421,11 +1426,19 @@ def blockchain_status(user=Depends(monitor_or_above)):
     return status
 
 
+@app.get("/api/blockchain/besu/status")
+def besu_status(user=Depends(monitor_or_above)):
+    """Returns dedicated connection health and state of the Hyperledger Besu QBFT node."""
+    rate_limit("besu-status:" + user["id"], limit=60)
+    from src.blockchain.besu_adapter import get_besu_adapter
+    return get_besu_adapter().get_status()
+
+
 @app.get("/api/blockchain/proof/{event_id}")
 def blockchain_proof(event_id: str, user=Depends(monitor_or_above)):
     """
     Returns cryptographic Merkle inclusion proof and on-chain anchoring status
-    for an individual audit event.
+    for an individual audit event across Sepolia and Besu.
     """
     rate_limit("blockchain-proof:" + user["id"], limit=60)
     from src.blockchain.audit_batcher import get_batch_inclusion_proof
@@ -1442,18 +1455,33 @@ def blockchain_proof(event_id: str, user=Depends(monitor_or_above)):
         }
     proof = get_batch_inclusion_proof(batch, event_id)
     clean_id = batch.batch_id.lower().replace("0x", "")
-    job = ob.get_job(f"anchor_job:sepolia:{clean_id}")
+    sepolia_job = ob.get_job(f"anchor_job:sepolia:{clean_id}")
+    besu_job = ob.get_job(f"anchor_job:besu:{clean_id}")
     return {
-        "anchored": bool(job and job.status == "CONFIRMED"),
-        "status": job.status if job else "PENDING",
+        "anchored": bool(sepolia_job and sepolia_job.status == "CONFIRMED"),
+        "status": sepolia_job.status if sepolia_job else "PENDING",
         "network": "sepolia",
         "batch_id": batch.batch_id,
         "root_hash": batch.root_hash,
         "first_sequence": batch.first_sequence,
         "last_sequence": batch.last_sequence,
         "event_count": batch.event_count,
-        "tx_hash": job.tx_hash if job else None,
-        "block_number": job.block_number if job else None,
+        "tx_hash": sepolia_job.tx_hash if sepolia_job else None,
+        "block_number": sepolia_job.block_number if sepolia_job else None,
+        "networks": {
+            "sepolia": {
+                "anchored": bool(sepolia_job and sepolia_job.status == "CONFIRMED"),
+                "status": sepolia_job.status if sepolia_job else "PENDING",
+                "tx_hash": sepolia_job.tx_hash if sepolia_job else None,
+                "block_number": sepolia_job.block_number if sepolia_job else None,
+            },
+            "besu": {
+                "anchored": bool(besu_job and besu_job.status == "CONFIRMED"),
+                "status": besu_job.status if besu_job else "PENDING",
+                "tx_hash": besu_job.tx_hash if besu_job else None,
+                "block_number": besu_job.block_number if besu_job else None,
+            },
+        },
         "merkle_proof": [p.model_dump() for p in proof] if proof else [],
     }
 

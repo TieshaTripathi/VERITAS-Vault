@@ -215,8 +215,26 @@ async function load() {
       if (totalAnchors) {
         totalAnchors.textContent = bc.totalAnchors !== null && bc.totalAnchors !== undefined ? String(bc.totalAnchors) : "0";
       }
-      if (latestBlock) {
-        latestBlock.textContent = bc.latestBlock ? `#${bc.latestBlock}` : "—";
+
+      // Besu status rendering
+      const besu = bc.besu || {};
+      const isBesuConnected = Boolean(besu.connected);
+      const besuStatusEl = $("#besu-status");
+      const besuAnchorsEl = $("#besu-total-anchors");
+      if (besuStatusEl) {
+        besuStatusEl.textContent = isBesuConnected
+          ? `ACTIVE (${besu.latencyMs ? Math.round(besu.latencyMs) + "ms" : "OK"})`
+          : (besu.error ? "STANDBY" : "OFFLINE");
+        besuStatusEl.style.color = isBesuConnected ? "#10b981" : "#91a5bc";
+      }
+      if (besuAnchorsEl) {
+        besuAnchorsEl.textContent = besu.totalAnchors !== null && besu.totalAnchors !== undefined ? String(besu.totalAnchors) : "0";
+      }
+
+      if (chainBadge) {
+        const anyActive = isConnected || isBesuConnected;
+        chainBadge.textContent = anyActive ? "ANCHORED" : "STANDBY";
+        chainBadge.className = anyActive ? "badge GRANTED" : "badge WAITING";
       }
 
       if (bc.outbox) {

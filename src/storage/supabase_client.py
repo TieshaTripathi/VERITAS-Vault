@@ -21,9 +21,13 @@ class SupabaseCloud:
             raise CloudUnavailable("Supabase URL and server secret key are required")
 
     def request(self, method, path, *, json=None, content=None, headers=None, params=None):
-        auth = {"apikey": self.key}
+        auth = {
+            "apikey": self.key,
+            "User-Agent": "VERITAS-Vault-Backend/3.0",
+        }
         if self.key.startswith("eyJ"):
             auth["Authorization"] = f"Bearer {self.key}"
+        # sb_secret_ opaque keys are passed strictly in apikey header without Bearer JWT wrapping
         auth.update(headers or {})
 
         # Bounded retries for transient connection reset or 502/503/504
@@ -88,7 +92,10 @@ class SupabaseCloud:
     def check_health(self, timeout: float = 3.0) -> bool:
         """Lightweight database connectivity check with strict timeout."""
         try:
-            auth = {"apikey": self.key}
+            auth = {
+                "apikey": self.key,
+                "User-Agent": "VERITAS-Vault-Backend/3.0",
+            }
             if self.key.startswith("eyJ"):
                 auth["Authorization"] = f"Bearer {self.key}"
             res = httpx.get(f"{self.url}/rest/v1/vault_records?select=id&limit=1", headers=auth, timeout=timeout)
