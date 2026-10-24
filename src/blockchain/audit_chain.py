@@ -34,10 +34,10 @@ class AuditLedger:
     """
     Cryptographic Tamper-Evident Hash-Chained Audit Ledger with Ed25519 Asymmetric Signatures.
     """
-    def __init__(self, db_path: Optional[Path] = None, keys_dir: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Any] = None, keys_dir: Optional[Any] = None):
         root = Path(__file__).resolve().parents[2]
-        self.db_path = db_path or (root / "data" / "pwa" / "vault-audit-ledger.sqlite3")
-        self.keys_dir = keys_dir or (root / "data" / "keys")
+        self.db_path = Path(db_path) if db_path else (root / "data" / "pwa" / "vault-audit-ledger.sqlite3")
+        self.keys_dir = Path(keys_dir) if keys_dir else (root / "data" / "keys")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.keys_dir.mkdir(parents=True, exist_ok=True)
 
@@ -190,6 +190,38 @@ class AuditLedger:
             "signer_key_id": row[8]
         }
 
+    def get_events_range(self, first_sequence: int, last_sequence: int) -> List[Dict[str, Any]]:
+        """Fetches contiguous audit events by sequence bounds."""
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            rows = conn.execute(
+                "SELECT sequence_number, event_id, timestamp, previous_hash, evidence_hash, payload, event_hash, signature, signer_key_id "
+                "FROM audit_chain WHERE sequence_number >= ? AND sequence_number <= ? ORDER BY sequence_number ASC",
+                (first_sequence, last_sequence)
+            ).fetchall()
+        return [
+            {
+                "sequence_number": r[0],
+                "chain_sequence": r[0],
+                "event_id": r[1],
+                "id": r[1],
+                "timestamp": r[2],
+                "previous_hash": r[3],
+                "evidence_hash": r[4],
+                "payload": json.loads(r[5]),
+                "event_hash": r[6],
+                "sha256_hash": r[6],
+                "signature": r[7],
+                "signer_key_id": r[8],
+            }
+            for r in rows
+        ]
+
+    def get_max_sequence(self) -> int:
+        """Returns the highest monotonic sequence number currently in the ledger."""
+        with sqlite3.connect(self.db_path, timeout=10) as conn:
+            row = conn.execute("SELECT MAX(sequence_number) FROM audit_chain").fetchone()
+        return int(row[0]) if (row and row[0] is not None) else 0
+
     def verify_event(self, event_id: str) -> Dict[str, Any]:
         """
         Cryptographically verifies the authenticity, hash integrity, and chain linkage of an event.
@@ -227,6 +259,26 @@ class AuditLedger:
 
         verified = (prev_ok and hash_ok and sig_ok)
 
+        # 4. Check blockchain anchor if batched
+        anchor_info: Dict[str, Any] = {"status": "QUEUED_FOR_BATCH", "network": "sepolia"}
+        try:
+            from src.blockchain.outbox import get_outbox_manager
+            ob = get_outbox_manager()
+            batch = ob.get_batch_for_event(event_id, seq)
+            if batch:
+                clean_id = batch.batch_id.lower().replace("0x", "")
+                job = ob.get_job(f"anchor_job:sepolia:{clean_id}")
+                anchor_info = {
+                    "network": "sepolia",
+                    "status": job.status if job else "PENDING",
+                    "batch_id": batch.batch_id,
+                    "root_hash": batch.root_hash,
+                    "tx_hash": job.tx_hash if job else None,
+                    "block_number": job.block_number if job else None,
+                }
+        except Exception:
+            pass
+
         return {
             "verified": verified,
             "event_id": event_id,
@@ -235,7 +287,8 @@ class AuditLedger:
             "previous_hash_linked": prev_ok,
             "signature_valid": sig_ok,
             "evidence_hash_valid": bool(ev_hash),
-            "permissioned_ledger_anchor": "SIMULATED_LEDGER_ADAPTER_PENDING_RPC"
+            "permissioned_ledger_anchor": anchor_info.get("status", "SIMULATED_LEDGER_ADAPTER_PENDING_RPC"),
+            "blockchain_anchor": anchor_info,
         }
 
     def verify_chain(self, limit: int = 100) -> Dict[str, Any]:

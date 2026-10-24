@@ -156,3 +156,46 @@ def verify_batch_inclusion_proof(
     clean_event = event_hash.lower().replace("0x", "")
     clean_root = root_hash.lower().replace("0x", "")
     return MerkleTree.verify_merkle_proof(clean_event, proof, clean_root)
+
+
+def batch_unanchored_events(
+    ledger=None,
+    outbox=None,
+    batch_size: int = 10,
+    networks: Optional[List[str]] = None,
+) -> Optional[AuditBatch]:
+    """
+    Scans for contiguous unbatched audit events in the ledger, packages them
+    into a deterministic AuditBatch, and enqueues them into the durable outbox.
+    Returns the created AuditBatch, or None if no unbatched events exist.
+    """
+    from src.blockchain.audit_chain import default_audit_ledger
+    from src.blockchain.outbox import get_outbox_manager
+    from src.pwa.store import Store
+
+    led = ledger or default_audit_ledger
+    ob = outbox or get_outbox_manager()
+    store = getattr(ob, "store", None) or Store()
+
+    rec, _ = store.get("audit:batch_progress")
+    last_batched = int(rec.get("last_batched_sequence", 0)) if rec else 0
+    max_seq = led.get_max_sequence()
+
+    if max_seq <= last_batched:
+        return None
+
+    first_seq = last_batched + 1
+    last_seq = min(max_seq, first_seq + batch_size - 1)
+
+    events = led.get_events_range(first_seq, last_seq)
+    if not events:
+        return None
+
+    batch = create_batch_from_events(events)
+    ob.enqueue_batch(batch, networks=networks or ["sepolia"])
+    store.put("audit:batch_progress", {
+        "last_batched_sequence": last_seq,
+        "last_batch_id": batch.batch_id,
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    return batch

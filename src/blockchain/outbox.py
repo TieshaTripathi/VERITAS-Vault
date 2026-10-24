@@ -93,6 +93,25 @@ class BlockchainOutboxManager:
         saved, _ = self.store.get(key)
         if not saved:
             self.store.put(key, batch.model_dump())
+            # Maintain O(1) reverse event -> batch index
+            for eid in batch.event_ids:
+                self.store.put(f"event_batch:{eid}", batch.batch_id)
+
+        # Synchronize with Supabase public.audit_batches table if cloud configured
+        if getattr(self.store, "cloud", None):
+            try:
+                self.store.cloud.request("POST", "/rest/v1/audit_batches", json={
+                    "batch_id": batch.batch_id,
+                    "root_hash": batch.root_hash,
+                    "first_sequence": batch.first_sequence,
+                    "last_sequence": batch.last_sequence,
+                    "event_count": batch.event_count,
+                    "event_ids": batch.event_ids,
+                    "leaf_hashes": batch.leaf_hashes,
+                    "created_at": batch.created_at,
+                })
+            except Exception as e:
+                logger.debug("Cloud audit_batches sync skipped/fallback: %s", e)
 
     def get_batch(self, batch_id: str) -> Optional[AuditBatch]:
         """Fetches persisted batch record by batch_id."""
@@ -100,6 +119,59 @@ class BlockchainOutboxManager:
         saved, _ = self.store.get(key)
         if saved:
             return AuditBatch.model_validate(saved)
+        # Fallback to Supabase audit_batches table
+        if getattr(self.store, "cloud", None):
+            try:
+                rows = self.store.cloud.rows("audit_batches", batch_id=f"eq.{batch_id}", select="*")
+                if rows:
+                    return AuditBatch(
+                        batch_id=rows[0]["batch_id"],
+                        root_hash=rows[0]["root_hash"],
+                        first_sequence=rows[0]["first_sequence"],
+                        last_sequence=rows[0]["last_sequence"],
+                        event_count=rows[0]["event_count"],
+                        event_ids=rows[0].get("event_ids", []),
+                        leaf_hashes=rows[0].get("leaf_hashes", []),
+                        created_at=rows[0]["created_at"],
+                        created_at_epoch=0.0,
+                    )
+            except Exception:
+                pass
+        return None
+
+    def get_batch_for_event(self, event_id: str, sequence_number: Optional[int] = None) -> Optional[AuditBatch]:
+        """Looks up the AuditBatch containing a specific event by event_id or sequence bounds."""
+        key = f"event_batch:{event_id}"
+        batch_id, _ = self.store.get(key)
+        if batch_id and isinstance(batch_id, str):
+            b = self.get_batch(batch_id)
+            if b:
+                return b
+
+        if sequence_number is not None and sequence_number > 0:
+            for _, payload, _ in self.store.records("batch:"):
+                if isinstance(payload, dict):
+                    if payload.get("first_sequence", 0) <= sequence_number <= payload.get("last_sequence", 0):
+                        return AuditBatch.model_validate(payload)
+
+        # Fallback to Supabase audit_batches table
+        if getattr(self.store, "cloud", None):
+            try:
+                rows = self.store.cloud.rows("audit_batches", event_ids=f"cs.[\"{event_id}\"]", select="*")
+                if rows:
+                    return AuditBatch(
+                        batch_id=rows[0]["batch_id"],
+                        root_hash=rows[0]["root_hash"],
+                        first_sequence=rows[0]["first_sequence"],
+                        last_sequence=rows[0]["last_sequence"],
+                        event_count=rows[0]["event_count"],
+                        event_ids=rows[0].get("event_ids", []),
+                        leaf_hashes=rows[0].get("leaf_hashes", []),
+                        created_at=rows[0]["created_at"],
+                        created_at_epoch=0.0,
+                    )
+            except Exception:
+                pass
         return None
 
     def enqueue_batch(
@@ -150,12 +222,55 @@ class BlockchainOutboxManager:
             self.store.put(key, job.model_dump())
             enqueued.append(job)
 
+            # Synchronize with Supabase blockchain_outbox table if cloud configured
+            if getattr(self.store, "cloud", None):
+                try:
+                    self.store.cloud.request("POST", "/rest/v1/blockchain_outbox", json={
+                        "job_id": job.job_id,
+                        "network": job.network,
+                        "batch_id": job.batch_id,
+                        "status": job.status,
+                        "attempts": job.attempts,
+                        "max_retries": job.max_retries,
+                        "created_at": job.created_at,
+                        "updated_at": job.updated_at,
+                    })
+                except Exception as e:
+                    logger.debug("Cloud blockchain_outbox insert skipped/fallback: %s", e)
+
         return enqueued
 
     def get_job(self, job_id: str) -> Optional[OutboxJob]:
         saved, _ = self.store.get(job_id)
         if saved:
             return OutboxJob.model_validate(saved)
+        # Fallback to Supabase blockchain_outbox table
+        if getattr(self.store, "cloud", None):
+            try:
+                rows = self.store.cloud.rows("blockchain_outbox", job_id=f"eq.{job_id}", select="*")
+                if rows:
+                    r = rows[0]
+                    b = self.get_batch(r["batch_id"])
+                    return OutboxJob(
+                        job_id=r["job_id"],
+                        network=r["network"],
+                        batch_id=r["batch_id"],
+                        root_hash=b.root_hash if b else "",
+                        first_sequence=b.first_sequence if b else 1,
+                        last_sequence=b.last_sequence if b else 1,
+                        event_count=b.event_count if b else 1,
+                        status=r["status"],
+                        attempts=r["attempts"],
+                        max_retries=r["max_retries"],
+                        lease_holder=r.get("lease_holder"),
+                        tx_hash=r.get("tx_hash"),
+                        block_number=r.get("block_number"),
+                        last_error=r.get("last_error"),
+                        created_at=r["created_at"],
+                        updated_at=r["updated_at"],
+                    )
+            except Exception:
+                pass
         return None
 
     def claim_jobs(
@@ -166,16 +281,52 @@ class BlockchainOutboxManager:
         lease_duration: Optional[float] = None,
     ) -> List[OutboxJob]:
         """
-        Atomically claims available outbox jobs for a worker using CAS.
+        Atomically claims available outbox jobs for a worker using CAS or Supabase SKIP LOCKED.
         Eligible jobs:
         - status == PENDING
         - status == RETRY and next_attempt_at <= now
         - status == SUBMITTED and lease_expires_at < now (expired lease recovery)
         """
+        duration = self.default_lease_duration if lease_duration is None else lease_duration
+
+        # 1. Attempt Supabase atomic RPC with SKIP LOCKED if cloud configured
+        if getattr(self.store, "cloud", None):
+            try:
+                res = self.store.cloud.request("POST", "/rest/v1/rpc/claim_blockchain_outbox_jobs", json={
+                    "p_network": network.lower(),
+                    "p_worker_id": worker_id,
+                    "p_limit": limit,
+                    "p_lease_seconds": int(duration),
+                }).json()
+                if isinstance(res, list) and res:
+                    claimed_cloud: List[OutboxJob] = []
+                    for r in res:
+                        b = self.get_batch(r["batch_id"])
+                        job = OutboxJob(
+                            job_id=r["job_id"],
+                            network=r["network"],
+                            batch_id=r["batch_id"],
+                            root_hash=b.root_hash if b else "",
+                            first_sequence=b.first_sequence if b else 1,
+                            last_sequence=b.last_sequence if b else 1,
+                            event_count=b.event_count if b else 1,
+                            status=r["status"],
+                            attempts=r["attempts"],
+                            max_retries=r["max_retries"],
+                            lease_holder=r.get("lease_holder"),
+                            created_at=r["created_at"],
+                            updated_at=r["updated_at"],
+                        )
+                        claimed_cloud.append(job)
+                        self.store.put(job.job_id, job.model_dump())
+                    return claimed_cloud
+            except Exception as e:
+                logger.debug("Cloud RPC claim_blockchain_outbox_jobs fallback to CAS: %s", e)
+
+        # 2. Local CAS store scanning
         prefix = f"anchor_job:{network.lower()}:"
         records = self.store.records(prefix)
         now = time.time()
-        duration = self.default_lease_duration if lease_duration is None else lease_duration
 
         claimed: List[OutboxJob] = []
 
@@ -263,6 +414,19 @@ class BlockchainOutboxManager:
 
             if self.store.cas(job_id, version, updated):
                 logger.info("Job %s confirmed on blockchain (tx: %s, block: %s)", job_id, tx_hash, block_number)
+                if getattr(self.store, "cloud", None):
+                    try:
+                        self.store.cloud.request("PATCH", "/rest/v1/blockchain_outbox", params={"job_id": f"eq.{job_id}"}, json={
+                            "status": "CONFIRMED",
+                            "lease_holder": None,
+                            "lease_expires_at": None,
+                            "tx_hash": tx_hash,
+                            "block_number": block_number,
+                            "last_error": None,
+                            "updated_at": updated["updated_at"],
+                        })
+                    except Exception as e:
+                        logger.debug("Cloud blockchain_outbox record_success fallback: %s", e)
                 return True
 
         return False
@@ -311,6 +475,18 @@ class BlockchainOutboxManager:
                 logger.error("Job %s permanently failed after %d attempts: %s", job_id, attempts, error_message)
 
             if self.store.cas(job_id, version, updated):
+                if getattr(self.store, "cloud", None):
+                    try:
+                        self.store.cloud.request("PATCH", "/rest/v1/blockchain_outbox", params={"job_id": f"eq.{job_id}"}, json={
+                            "status": updated["status"],
+                            "lease_holder": None,
+                            "lease_expires_at": None,
+                            "attempts": attempts,
+                            "last_error": updated["last_error"],
+                            "updated_at": updated["updated_at"],
+                        })
+                    except Exception as e:
+                        logger.debug("Cloud blockchain_outbox record_failure fallback: %s", e)
                 return True
 
         return False
@@ -343,10 +519,22 @@ class BlockchainOutboxManager:
         Re-queues them to PENDING for automatic recovery after server crashes or restarts.
         Transitions poison-pill jobs (attempts >= max_retries) to FAILED.
         """
+        recovered = 0
+
+        # 1. Attempt Supabase stored procedure if cloud configured
+        if getattr(self.store, "cloud", None):
+            try:
+                res = self.store.cloud.request("POST", "/rest/v1/rpc/recover_expired_outbox_leases", json={
+                    "p_network": network.lower() if network else None
+                }).json()
+                if isinstance(res, int) and res > 0:
+                    recovered += res
+            except Exception as e:
+                logger.debug("Cloud RPC recover_expired_outbox_leases fallback: %s", e)
+
         prefix = f"anchor_job:{network.lower()}:" if network else "anchor_job:"
         records = self.store.records(prefix)
         now = time.time()
-        recovered = 0
 
         for key, payload, version in records:
             if not isinstance(payload, dict):

@@ -103,13 +103,21 @@ function inspect(event) {
       "Ed25519 signature": event.signature || "—",
       "Signer key ID": event.signer_key_id || "ed25519-node-primary-v1",
     } : {}),
+    ...(event.batch_id ? {
+      "Merkle batch ID": event.batch_id,
+      "Merkle root hash": event.root_hash || "—",
+    } : {}),
+    ...(event.blockchain_anchor ? {
+      "Blockchain anchor": `${(event.blockchain_anchor.network || "sepolia").toUpperCase()} · ${event.blockchain_anchor.status}` +
+        (event.blockchain_anchor.tx_hash ? ` (${event.blockchain_anchor.tx_hash.slice(0, 10)}…)` : ""),
+    } : {}),
   };
   for (const [label, value] of Object.entries(fields)) {
     const dt = document.createElement("dt"),
       dd = document.createElement("dd");
     dt.textContent = label;
     dd.textContent = value;
-    if ((label.includes("SHA-256") || label.includes("hash") || label.includes("signature")) && value && value !== "—" && !value.includes("No frame")) {
+    if ((label.includes("SHA-256") || label.includes("hash") || label.includes("signature") || label.includes("batch")) && value && value !== "—" && !value.includes("No frame")) {
       const copyBtn = document.createElement("button");
       copyBtn.className = "quiet";
       copyBtn.style.cssText = "margin-left: 8px; padding: 2px 8px; font-size: 11px; vertical-align: middle;";

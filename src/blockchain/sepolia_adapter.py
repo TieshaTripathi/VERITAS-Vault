@@ -276,6 +276,42 @@ class SepoliaAuditAnchorAdapter:
         self._last_checked_at = now
         return status
 
+    def is_batch_anchored(self, batch_id: str) -> bool:
+        """Read-only query to verify if a batchId is anchored on Sepolia."""
+        try:
+            w3 = self._get_w3()
+            clean = batch_id.lower().replace("0x", "")
+            b_bytes = bytes.fromhex(clean)
+            contract = w3.eth.contract(address=self._contract_address, abi=self._abi)
+            return bool(contract.functions.isBatchAnchored(b_bytes).call())
+        except Exception as exc:
+            logger.warning("Failed to check isBatchAnchored for %s: %s", batch_id, exc)
+            return False
+
+    def get_anchor(self, batch_id: str) -> Optional[Dict[str, Any]]:
+        """Read-only fetch of on-chain anchor record from Sepolia."""
+        try:
+            w3 = self._get_w3()
+            clean = batch_id.lower().replace("0x", "")
+            b_bytes = bytes.fromhex(clean)
+            contract = w3.eth.contract(address=self._contract_address, abi=self._abi)
+            if not contract.functions.isBatchAnchored(b_bytes).call():
+                return None
+            res = contract.functions.getAnchor(b_bytes).call()
+            return {
+                "root_hash": f"0x{res[0].hex()}",
+                "batch_id": f"0x{res[1].hex()}",
+                "first_sequence": int(res[2]),
+                "last_sequence": int(res[3]),
+                "event_count": int(res[4]),
+                "timestamp": int(res[5]),
+                "anchored_by": str(res[6]),
+                "cross_chain_ref": f"0x{res[7].hex()}",
+            }
+        except Exception as exc:
+            logger.warning("Failed to get anchor record for %s: %s", batch_id, exc)
+            return None
+
 
 # Global lazy singleton instance
 _adapter_instance: Optional[SepoliaAuditAnchorAdapter] = None

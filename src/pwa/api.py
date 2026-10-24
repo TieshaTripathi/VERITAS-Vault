@@ -59,10 +59,17 @@ logger = logging.getLogger("vault.api")
 
 def drain_blockchain_outbox():
     try:
+        from src.blockchain.audit_batcher import batch_unanchored_events
         from src.blockchain.outbox import get_outbox_manager
+        from src.blockchain.relayer import get_sepolia_relayer
+        # 1. Package unbatched audit events into Merkle tree batches
+        batch_unanchored_events()
+        # 2. Recover abandoned worker leases from restarts or crashes
         get_outbox_manager().recover_expired_leases()
+        # 3. Process outbox jobs in safe dry-run mode (or live if approved)
+        get_sepolia_relayer().process_outbox_jobs(dry_run=True)
     except Exception as exc:
-        logger.warning("Blockchain lease recovery error: %s", exc)
+        logger.warning("Blockchain outbox error: %s", exc)
 
 
 async def alert_worker_loop():
@@ -1122,9 +1129,29 @@ def logs(verdict: str = "", start: str = "", end: str = "", user=Depends(monitor
 
 @app.get("/api/logs/{event_id}")
 def single_log(event_id: uuid.UUID, user=Depends(monitor_or_above)):
-    event = Store().event(str(event_id))
+    eid = str(event_id)
+    event = Store().event(eid)
     if not event:
         raise HTTPException(404, "Audit log event not found")
+    try:
+        from src.blockchain.outbox import get_outbox_manager
+        ob = get_outbox_manager()
+        batch = ob.get_batch_for_event(eid, event.get("chain_sequence", 0))
+        if batch:
+            event["batch_id"] = batch.batch_id
+            event["root_hash"] = batch.root_hash
+            clean_id = batch.batch_id.lower().replace("0x", "")
+            job = ob.get_job(f"anchor_job:sepolia:{clean_id}")
+            event["blockchain_anchor"] = {
+                "network": "sepolia",
+                "status": job.status if job else "PENDING",
+                "tx_hash": job.tx_hash if job else None,
+                "block_number": job.block_number if job else None,
+            }
+        else:
+            event["blockchain_anchor"] = {"network": "sepolia", "status": "QUEUED_FOR_BATCH"}
+    except Exception:
+        pass
     return event
 
 
@@ -1392,6 +1419,43 @@ def blockchain_status(user=Depends(monitor_or_above)):
     except Exception as e:
         status["outbox"] = {"error": str(e), "total_batches_persisted": 0, "outbox_queues": {}}
     return status
+
+
+@app.get("/api/blockchain/proof/{event_id}")
+def blockchain_proof(event_id: str, user=Depends(monitor_or_above)):
+    """
+    Returns cryptographic Merkle inclusion proof and on-chain anchoring status
+    for an individual audit event.
+    """
+    rate_limit("blockchain-proof:" + user["id"], limit=60)
+    from src.blockchain.audit_batcher import get_batch_inclusion_proof
+    from src.blockchain.outbox import get_outbox_manager
+    ob = get_outbox_manager()
+    batch = ob.get_batch_for_event(event_id)
+    if not batch:
+        return {
+            "anchored": False,
+            "status": "QUEUED_FOR_BATCH",
+            "event_id": event_id,
+            "message": "Audit event has not yet been packed into a Merkle batch",
+            "merkle_proof": [],
+        }
+    proof = get_batch_inclusion_proof(batch, event_id)
+    clean_id = batch.batch_id.lower().replace("0x", "")
+    job = ob.get_job(f"anchor_job:sepolia:{clean_id}")
+    return {
+        "anchored": bool(job and job.status == "CONFIRMED"),
+        "status": job.status if job else "PENDING",
+        "network": "sepolia",
+        "batch_id": batch.batch_id,
+        "root_hash": batch.root_hash,
+        "first_sequence": batch.first_sequence,
+        "last_sequence": batch.last_sequence,
+        "event_count": batch.event_count,
+        "tx_hash": job.tx_hash if job else None,
+        "block_number": job.block_number if job else None,
+        "merkle_proof": [p.model_dump() for p in proof] if proof else [],
+    }
 
 
 class FCMTokenRegistration(BaseModel):
